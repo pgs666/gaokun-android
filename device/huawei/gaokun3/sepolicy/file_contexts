@@ -1,0 +1,4 @@
+# sepolicy/file_contexts -- gaokun3
+# Stage 2 跑 permissive，这里只放最基本的，编过即可。
+/vendor/etc/init/hw/init\.gaokun3\.rc       u:object_r:vendor_configs_file:s0
+/vendor/etc/init/hw/init\.gaokun3\.usb\.rc  u:object_r:vendor_configs_file:s0

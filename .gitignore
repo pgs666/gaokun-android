@@ -1,0 +1,28 @@
+# Third-party reference trees — cloned by scripts/clone-refs.sh, ~2.3 GB.
+# Not our code, not worth versioning. Re-clone instead.
+refs/
+
+# Collected inventory dumps (large, machine-specific, timestamped).
+# The distilled result belongs in docs/hw-inventory.md, not the raw dump.
+hw-inventory-*/
+hw-inventory-*.tar.gz
+
+# Build / scratch
+out/
+*.tar.gz
+*.img
+*.dtb
+*.dtbo
+
+# 预检报告输出（机器特定，采集结果誊进 docs/ 即可）
+scripts/ego-preflight-*.txt
+
+# 固件 blob 不进版本库：
+#   qca/ + a660_* 来自 linux-firmware >= 20241210（有再分发许可但没必要占仓库）
+#   HUAWEI/gaokun3/*.mbn 是华为专有固件（linux-firmware 里没有），
+#   从本机 Linux 的 /lib/firmware/ 或 Windows 驱动包提取，不可公开再分发。
+# 获取方法见 device/huawei/gaokun3/firmware/README.md
+device/huawei/gaokun3/firmware/**/*.mbn
+device/huawei/gaokun3/firmware/**/*.bin
+device/huawei/gaokun3/firmware/**/*.fw
+device/huawei/gaokun3/firmware/**/*.tlv

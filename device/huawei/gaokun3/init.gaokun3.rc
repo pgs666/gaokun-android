@@ -1,0 +1,30 @@
+# init.gaokun3.rc -- Huawei MateBook E Go (sc8280xp)
+
+on early-init
+    # 本机没有串口，内核日志只能靠 dmesg / efi_pstore
+    write /proc/sys/kernel/printk "7 4 1 7"
+
+# ⚠️ 这里绝不能自己挂 binderfs —— AOSP 16 的 init.rc 已原生处理
+# （挂 /dev/binderfs + 建 /dev/binder 等符号链接）。
+# 再挂一次会创建【第二个】binderfs 实例盖在上面：每个 binderfs 挂载是
+# 独立的 binder context，servicemanager 注册在旧实例上，之后的客户端
+# 全落到新实例 —— "cannot find target node" 死循环，vdc 卡死启动。
+# （内核侧 CONFIG_ANDROID_BINDERFS=y 时静态 binder 设备根本不注册，
+#   见 drivers/android/binder.c binder_init 的 IS_ENABLED 判断。）
+# 这是 aospm sdm845（Android 13 时代）模板的写法，16 上是事故源。
+# 实测踩坑记录见 docs/stage2-findings.md 第 9 节。
+
+# ⚠️ mount_all 必须由设备 rc 调用 —— AOSP 16 的 init.rc 自己不调
+# （init.rc:511-520 注释明说 "Mount fstab in init.{$device}.rc by
+#   mount_all command"）。缺了它 /data 永远不挂载：post-fs-data 的
+#   mkdir 全打在只读 system 根的 /data 空目录上报 EROFS，
+#   keystore2 因 /data/misc/keystore 不存在而崩溃循环。实测见
+#   docs/stage2-findings.md 第 8.3bis 节。
+on fs
+    mount_all /vendor/etc/fstab.gaokun3 --early
+
+on late-fs
+    mount_all /vendor/etc/fstab.gaokun3 --late
+
+on post-fs-data
+    mkdir /data/vendor 0771 root root
