@@ -45,7 +45,27 @@ OUT="${1:?用法: $0 <kernel-out-dir>}"
     --enable I2C_QCOM_GENI --enable PHY_QCOM_USB_SNPS_FEMTO_V2 \
     --enable REGULATOR_QCOM_REFGEN --enable INTERCONNECT_QCOM_OSM_L3 \
     --enable NVMEM_SPMI_SDAM --enable SPI_QCOM_GENI \
-    --enable POWER_SEQUENCING_QCOM_WCN
+    --enable POWER_SEQUENCING_QCOM_WCN \
+    \
+    `# —— 前瞻项（来自平行项目 mainline-generic 的 gaokun3 fragment，` \
+    `#    docs/parallel-mainline-generic.md）。netd/bpfloader/lmkd 到位后必炸的：` \
+    --enable NETFILTER_XTABLES --enable IP_NF_IPTABLES --enable IP_NF_FILTER \
+    --enable IP_NF_TARGET_REJECT --enable IP6_NF_IPTABLES --enable IP6_NF_FILTER \
+    --enable IP6_NF_TARGET_REJECT --enable NETFILTER_XT_MATCH_BPF \
+    --enable NETFILTER_XT_MATCH_OWNER --enable NETFILTER_XT_MATCH_MARK \
+    --enable NETFILTER_XT_TARGET_IDLETIMER --enable NETFILTER_XT_TARGET_MARK \
+    --enable KPROBES --enable BPF_EVENTS --enable BPF_LSM --enable BPF_JIT_ALWAYS_ON \
+    \
+    `# —— 框架/内存管理（同上来源）——` \
+    --enable ZRAM --enable ZRAM_BACKEND_LZ4 --enable ZRAM_BACKEND_ZSTD \
+    --enable ZRAM_WRITEBACK --enable ZRAM_MULTI_COMP \
+    --enable INPUT_UINPUT --enable CFS_BANDWIDTH --enable TASK_DELAY_ACCT \
+    --enable DM_UEVENT --enable DM_VERITY_FEC --enable DM_CRYPT \
+    --enable FS_ENCRYPTION --enable FS_VERITY \
+    --enable EROFS_FS --enable EROFS_FS_XATTR --enable EROFS_FS_POSIX_ACL \
+    --enable F2FS_FS --enable F2FS_FS_XATTR --enable F2FS_FS_POSIX_ACL \
+    --enable F2FS_FS_SECURITY
+    `# ⚠️ 不要抄 DM_DEFAULT_KEY（android-common 专有，主线没有）`
 
 # ★ 最关键也最容易漏的一步：
 #   CONFIG_SECURITY_SELINUX=y 只是「编进内核」，不等于「被激活」。

@@ -186,4 +186,7 @@ qcom/sc8280xp/HUAWEI/gaokun3/qcslpi8280.mbn              SLPI
 
 - gaokun 社区（Linux 侧）：面板、EC、休眠、触摸的问题问他们
 - aospm 社区（Android-on-mainline 侧）：HAL、设备树组织方式问他们
-- **这两个圈子此前没有交集**，本项目是第一个连接点
+- ~~这两个圈子此前没有交集，本项目是第一个连接点~~
+  **已有平行项目**：LineageOS 系 mainline-generic 正在做 gaokun3 live-ISO
+  （同款 buildbot 内核），双方结论交叉验证一致。他们的 config fragment
+  和模块清单是我们 Stage 3/4 的路线图，见 `docs/parallel-mainline-generic.md`。
