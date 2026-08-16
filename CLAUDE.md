@@ -5,10 +5,15 @@
 在华为 MateBook E Go（Snapdragon 8cx Gen 3 / sc8280xp，代号 gaokun）上跑原生 AOSP，
 最终目标是能稳定运行 arm64 手游。
 
-**当前阶段：Stage 2**（每次开工时更新这一行）
+**当前阶段：Stage 3（图形栈）**（每次开工时更新这一行）
 
-> Stage 0 / Stage 1 已于 2026-08-13 完成验收，见 `docs/hw-inventory.md`
-> 与 `docs/stage1-results.md`。本文中被实测推翻的描述已就地更正并标注。
+> Stage 0 / Stage 1 已于 2026-08-13 完成验收。
+> **Stage 2 已于 2026-08-17 完成验收：`adb shell` 通，Android 16 稳定运行**
+> （`gaokun3 device product:aosp_gaokun3`，内核 7.2.0-rc2-gaokun3+）。
+> 全部 12 个实测问题及修复见 `docs/stage2-findings.md`。
+> Stage 3 起点：surfaceflinger 崩于 "couldn't find an OpenGL ES
+> implementation"（mesa/gralloc/hwc 未装，abort message 见
+> `docs/stage2-acceptance-live.txt`）。
 
 ---
 
@@ -123,7 +128,7 @@ qcom/sc8280xp/HUAWEI/gaokun3/qcslpi8280.mbn              SLPI
 |---|---|---|
 | **0** ✅ | 主线 Linux 跑通 + 配好崩溃日志 + 采集素材 | 全部通过（pstore 走 efi_pstore） |
 | **1** ✅ | 内核转 Android 配置 | 全部通过（UDC 出现，主机端 `configured` 枚举）|
-| **2** 🔄 | 引导链 + AOSP 启动 | **adb shell 通了（黑屏也算成功）**<br>进行中：first stage 全通，卡在 second stage，见 `docs/stage2-findings.md` |
+| **2** ✅ | 引导链 + AOSP 启动 | **全部通过**（2026-08-17）：adb shell 通，keystore2/zygote/adbd 稳定运行。12 个问题的完整记录见 `docs/stage2-findings.md` |
 | **3** | 图形栈（minigbm + drm_hwcomposer + mesa） | 开机动画 → SystemUI 出画面 |
 | **4** | 输入 / 音频 / WiFi / 电源 | 触摸可用、有声音、能联网 |
 | **5** | 游戏适配 | 目标游戏能启动并稳定运行 |

@@ -14,6 +14,12 @@ on early-init
 # 这是 aospm sdm845（Android 13 时代）模板的写法，16 上是事故源。
 # 实测踩坑记录见 docs/stage2-findings.md 第 9 节。
 
+# ⚠️ /vendor/etc/init/hw/ 不会被 init 自动扫描（自动扫的是 /vendor/etc/init/），
+# 放这里的 rc 必须显式 import，否则静默不生效。实测后果：usb rc 从未运行，
+# sys.usb.configfs 恒为 0，触发走 legacy android_usb 分支（主线内核无此 sysfs），
+# gadget 永不绑 UDC。见 docs/stage2-findings.md 第 8.3quater 节。
+import /vendor/etc/init/hw/init.gaokun3.usb.rc
+
 # ⚠️ mount_all 必须由设备 rc 调用 —— AOSP 16 的 init.rc 自己不调
 # （init.rc:511-520 注释明说 "Mount fstab in init.{$device}.rc by
 #   mount_all command"）。缺了它 /data 永远不挂载：post-fs-data 的

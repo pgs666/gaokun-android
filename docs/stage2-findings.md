@@ -1,7 +1,19 @@
-# Stage 2 调试记录：Android 启动链路的四个真问题
+# Stage 2 调试记录：Android 启动链路的十二个真问题
 
-日期：2026-08-14 ~ 2026-08-15
-状态：**first stage 全通，卡在 second stage**
+日期：2026-08-14 ~ 2026-08-17
+状态：✅ **验收通过（2026-08-17）—— `adb shell` 通，Android 16 稳定运行**
+
+```
+$ adb devices -l
+gaokun3    device product:aosp_gaokun3 model:MateBook_E_Go device:gaokun3
+$ adb shell uname -a
+Linux localhost 7.2.0-rc2-gaokun3+ #2 SMP PREEMPT ... aarch64 Toybox
+```
+
+运行时验证（`docs/stage2-acceptance-live.txt`）：keystore2 健康、
+cpuset/cpu/blkio v1 hierarchy 挂载在用、UDC 绑定 role=device、zygote 运行。
+Stage 3 起点已由 surfaceflinger 的 abort message 指明：
+`couldn't find an OpenGL ES implementation`（mesa/gralloc/hwc 未装，刻意的）。
 
 > 这份文档记录的是"从零信息到定位"的完整过程。每一条都有实测依据。
 > 下次重建镜像时**照这里的清单配置**，可以跳过全部弯路。
@@ -508,6 +520,83 @@ platform 18591000.cpufreq: deferred probe pending: Failed to find icc paths
 **方法论**：查"驱动是不是模块"，不要信 `/sys/.../driver/module` 符号链接
 （内建驱动也可能有），**以 `lsmod` 为准**；config 名从对应 `Makefile` 的
 `obj-$(CONFIG_XXX) += 模块名.o` 反查，二者经常不一致。
+
+### 8.3ter 第八个真问题：keystore2 无 KeyMint 崩溃循环，经 vdc 绞死整个 boot
+
+驱动修复（=y 那轮）生效后：`/data` 挂上、EC/i2c probe、无 deferred pending。
+但 boot 停在 30 秒——keystore2（critical）崩 4 次触发 `InitFatalReboot`。
+这次 `init_fatal_panic` 精确触发（`sysrq: Trigger a crash`），
+⚠️ 但 **efi_pstore 在 panic 上下文没写成**（pstore 仍空——TrustZone efivars
+路径疑似不能在 panic 里用，待查）。tombstone 也全是 0 字节（tombstoned 同死）。
+
+**解除 critical（等长注释）后真相浮现**：Android 稳定运行 151 秒不复位，
+keystore2 崩 52 次，但 adbd/zygote 依然无影无踪。Action 时间线锁定：
+
+```
+init: SVC_EXEC 'exec 4 (/system/bin/vdc keymaster earlyBootEnded)' started; waiting...
+（永不返回 —— vdc 经 binder 调 keystore2，而 keystore2 在崩溃循环里）
+```
+
+init.rc 的这个 **exec（同步等待）** 排在 post-fs-data 里，它不返回，
+后面的 zygote-start / on boot / adbd 全部排不上队。
+**keystore2 起不来 = boot 绞死，critical 与否只决定复不复位。**
+
+**根因**：我们的 device.mk"能不装一律不装"，一个 HAL 都没带，
+keystore2 找不到任何 KeyMint 实例，启动即 Rust panic（消息进 logcat，拿不到）。
+
+**修复**（cuttlefish 同款软件实现，包名从 Android.bp 核实）：
+
+```makefile
+PRODUCT_PACKAGES += \
+    com.android.hardware.keymint.rust_nonsecure \      # keymint/aidl/default/Android.bp:183
+    com.android.hardware.gatekeeper.nonsecure          # gatekeeper/aidl/software/Android.bp:64
+```
+
+（gatekeeper 是预防性的——Stage 3 锁屏/框架要用，省一轮重编。）
+
+顺带：BPF_LSM 依赖链上 **buildbot config 连 FTRACE 都是关的**，
+`--enable BPF_EVENTS` 静默不生效——先开 FTRACE/KPROBE_EVENTS/UPROBE_EVENTS
+才能连锁成立。`scripts/config --enable` 对依赖不满足的项不报错，
+**改完必须 olddefconfig 后 grep 验证**。
+
+### 8.3quater 第九个问题：/vendor/etc/init/hw/ 不被自动扫描
+
+keymint 修好后 boot 全通（zygote/adbd/usbd 都起来了），但 USB 无枚举。
+日志里 `init.gaokun3.usb` **零命中** —— 这个 rc 从未被解析过：
+init 自动扫的是 `/vendor/etc/init/`，**`hw/` 子目录必须被显式 import**。
+`sys.usb.configfs` 恒为 0 → 触发走 legacy android_usb 分支（主线无此 sysfs）。
+
+**修复**：`init.gaokun3.rc` 顶部加
+`import /vendor/etc/init/hw/init.gaokun3.usb.rc`。
+
+### 8.3quinquies 第十、十一个问题：usb rc 顺序 + gadget 栈整个在模块里
+
+import 修好后 rc 跑了，暴露两层：
+
+**⑩ functionfs mount 在实例创建之前**——`mount functionfs adb ...` 在
+post-fs-data，而 `mkdir functions/ffs.adb`（注册实例）原在 on boot。
+实例不存在 mount 必 ENODEV。骨架整体挪到 post-fs-data 的 mount 之前。
+
+**⑪ tristate 父级陷阱（第 7 个坑的深水变体）**——顺序修好后仍 ENODEV：
+
+```
+CONFIG_USB_CONFIGFS=m        ← 父级（tristate）
+CONFIG_USB_LIBCOMPOSITE=m
+CONFIG_USB_F_FS=m            ← functionfs 文件系统类型的注册者
+CONFIG_USB_CONFIGFS_F_FS=y   ← 我们验证时看的是它 —— bool 子开关，被骗
+```
+
+`--enable USB_CONFIGFS_F_FS` 后 grep 到 `=y` 就以为完事——但它是模块内
+子开关，父级 `=m` 时整个 gadget 栈都不在内核里。`mount(2)` 对
+**未知文件系统类型**返回的同样是 ENODEV，与"实例不存在"无法区分。
+
+**教训：验证 config 必须看 tristate 父级（USB_CONFIGFS / USB_LIBCOMPOSITE /
+USB_F_FS），bool 子项的 =y 不代表代码进了内核。**
+
+**⑫ UCSI 会把 otg 口切成 host**——上上轮日志 `xhci-hcd ... io mem 0x0a600000`：
+新内核 EC/UCSI 内建后接管了角色，port 被切成 host（对端 PC 也是 host →
+电气零事件）。运行时接口 `/sys/class/usb_role/a600000.usb-role-switch/role`
+可写且稳定（Ubuntu 实测），usb rc 在 post-fs-data + boot 各写一次 `device`。
 
 ### 8.4 顺带确认的两件事
 

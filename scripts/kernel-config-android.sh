@@ -22,6 +22,11 @@ OUT="${1:?用法: $0 <kernel-out-dir>}"
     --enable MAGIC_SYSRQ --enable DEBUG_FS \
     \
     `# —— adb / USB gadget ——` \
+    `# ⚠️ USB_CONFIGFS_F_FS 等只是 tristate 父级下的 bool 子开关，` \
+    `#    父级 =m 时它们照样显示 =y 但整个栈都在模块里 —— Android 无模块，` \
+    `#    functionfs mount 报 ENODEV（未知文件系统类型同样是 ENODEV！）。` \
+    `#    三个父级必须显式 =y。实测见 findings 第 8.3quinquies 节。` \
+    --enable CONFIGFS_FS --enable USB_LIBCOMPOSITE --enable USB_CONFIGFS --enable USB_F_FS \
     --enable USB_CONFIGFS_F_FS --enable USB_CONFIGFS_ACM \
     --enable USB_CONFIGFS_MASS_STORAGE --enable USB_CONFIGFS_ECM \
     --enable USB_CONFIGFS_RNDIS --enable USB_CONFIGFS_EEM \

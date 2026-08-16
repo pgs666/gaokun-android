@@ -38,6 +38,18 @@ PRODUCT_PROPERTY_OVERRIDES += \
 PRODUCT_PROPERTY_OVERRIDES += \
     sys.usb.controller=a600000.usb
 
+# ------------------------------------------------- 安全 HAL（软件实现）
+# keystore2 是 critical 服务且被 init.rc 的
+#   exec 4 (/system/bin/vdc keymaster earlyBootEnded)
+# 同步等待 —— 它起不来整个 boot 队列就堵死（实测：keystore2 连崩 52 次，
+# adbd/zygote 永远排不上队，见 docs/stage2-findings.md）。
+# 本机没有可用 TEE，用 AOSP 自带的软件实现（cuttlefish 同款）：
+#   keymint:    hardware/interfaces/security/keymint/aidl/default/Android.bp:183
+#   gatekeeper: hardware/interfaces/gatekeeper/aidl/software/Android.bp:64
+PRODUCT_PACKAGES += \
+    com.android.hardware.keymint.rust_nonsecure \
+    com.android.hardware.gatekeeper.nonsecure
+
 # ------------------------------------------------------------------ 固件
 # [measured] 全部来自 Stage 0 的 dmesg 固件加载路径。
 # 配合 cmdline 里的 firmware_class.path=/vendor/firmware/，
