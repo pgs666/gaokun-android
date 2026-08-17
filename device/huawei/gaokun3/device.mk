@@ -181,3 +181,22 @@ PRODUCT_COPY_FILES += \
 #   WiFi   wpa_supplicant + ath11k
 #   传感器 / 相机 / 振动
 #
+
+# ─── Stage 4: WiFi（ath11k 主线 + AIDL HAL APEX + wpa_supplicant）───
+PRODUCT_PACKAGES += \
+    com.android.hardware.wifi \
+    wpa_supplicant
+
+PRODUCT_COPY_FILES += \
+    $(LOCAL_PATH)/wifi/wpa_supplicant.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/wpa_supplicant.rc \
+    frameworks/native/data/etc/android.hardware.wifi.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.wifi.xml
+
+# WCN6855 固件（board-2.bin 已验含 NTM_TW220，DTS qcom,calibration-variant 所需）
+PRODUCT_COPY_FILES += \
+    $(LOCAL_PATH)/firmware/ath11k/WCN6855/hw2.0/amss.bin:$(TARGET_COPY_OUT_VENDOR)/firmware/ath11k/WCN6855/hw2.0/amss.bin \
+    $(LOCAL_PATH)/firmware/ath11k/WCN6855/hw2.0/board-2.bin:$(TARGET_COPY_OUT_VENDOR)/firmware/ath11k/WCN6855/hw2.0/board-2.bin \
+    $(LOCAL_PATH)/firmware/ath11k/WCN6855/hw2.0/m3.bin:$(TARGET_COPY_OUT_VENDOR)/firmware/ath11k/WCN6855/hw2.0/m3.bin \
+    $(LOCAL_PATH)/firmware/ath11k/WCN6855/hw2.0/regdb.bin:$(TARGET_COPY_OUT_VENDOR)/firmware/ath11k/WCN6855/hw2.0/regdb.bin
+
+PRODUCT_VENDOR_PROPERTIES += \
+    wifi.interface=wlan0

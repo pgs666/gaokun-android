@@ -129,3 +129,7 @@ DEVICE_MANIFEST_FILE := device/huawei/gaokun3/manifest.xml
 #
 # 以上都是 aospm sdm845 模板（Android 13 时代）里有、但在 16 上会出问题的写法。
 #
+
+# WiFi
+WPA_SUPPLICANT_VERSION := VER_0_8_X
+BOARD_WPA_SUPPLICANT_DRIVER := NL80211

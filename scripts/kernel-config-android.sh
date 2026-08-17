@@ -72,6 +72,20 @@ OUT="${1:?用法: $0 <kernel-out-dir>}"
     --enable F2FS_FS_SECURITY
     `# ⚠️ 不要抄 DM_DEFAULT_KEY（android-common 专有，主线没有）`
 
+# ─── Stage 4: WiFi + BT 全栈 =y（Android 无模块加载，第 11 次踩 =m 坑）───
+#   PCI_PWRCTRL_PWRSEQ 是无提示隐藏项，由 ATH11K_PCI select（含 HAVE_PWRCTRL 链），
+#   =m 时 WCN6855 无人上电 → PCI 域 0006 整个不枚举。
+#   ⚠️ olddefconfig 必须带 ARCH=arm64，否则按 x86 Kconfig 重算会删光 arm64 符号！
+./scripts/config --file "$OUT/.config" \
+    --enable CFG80211 --enable MAC80211 --enable RFKILL \
+    --enable ATH_COMMON --enable ATH11K --enable ATH11K_PCI \
+    --enable QRTR --enable QRTR_MHI --enable QRTR_SMD --enable QRTR_TUN \
+    --enable MHI_BUS --enable MHI_BUS_PCI_GENERIC \
+    --enable QCOM_QMI_HELPERS --enable PCI_PWRCTRL_PWRSEQ \
+    --enable BT --enable BT_BREDR --enable BT_LE \
+    --enable BT_QCA --enable BT_HCIUART
+    `# BT_HCIUART_QCA 已默认 y（在 BT_HCIUART 之下）`
+
 # ★ 最关键也最容易漏的一步：
 #   CONFIG_SECURITY_SELINUX=y 只是「编进内核」，不等于「被激活」。
 #   真正决定哪些 LSM 生效的是 CONFIG_LSM 这个字符串。
