@@ -39,3 +39,10 @@ on post-fs-data
 # vendor 挂载后（post-fs-data）手动补一次 bind。见 docs/stage4-findings.md #28
 on post-fs-data
     write /sys/bus/pci/drivers/ath11k_pci/bind "0006:01:00.0"
+
+# remoteproc 兜底：ramdisk 里已带固件，早期 probe 正常就已 running；
+# 万一没起来（固件路径变动等），这里补一刀。ADSP 不起来就没有声卡。
+on property:sys.boot_completed=1
+    write /sys/class/remoteproc/remoteproc0/state start
+    write /sys/class/remoteproc/remoteproc1/state start
+    write /sys/class/remoteproc/remoteproc2/state start

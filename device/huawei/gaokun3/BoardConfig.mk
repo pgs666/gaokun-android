@@ -135,3 +135,9 @@ WPA_SUPPLICANT_VERSION := VER_0_8_X
 BOARD_WPA_SUPPLICANT_DRIVER := NL80211
 BOARD_WLAN_DEVICE := emulator
 BOARD_HOSTAPD_DRIVER := NL80211
+
+# 固件 blob（qcadsp/qccdsp/qcslpi/zap shader 的 .mbn）本身就是 ELF 格式，
+# 而 AOSP 会拒绝 PRODUCT_COPY_FILES 里目标路径含 bin/lib/lib64 的 ELF 文件。
+# ramdisk 副本必须落在 /lib/firmware（内核的固件回落搜索路径），只能开这个
+# 官方逃生开关。vendor 路径（/vendor/firmware/...）不含 lib 组件，本来就豁免。
+BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES := true

@@ -1,0 +1,52 @@
+From: gaokun-Android project
+Subject: [PATCH] external/deqp-deps/glslang: add host glslangValidator binary
+
+mesa 的 turnip（freedreno Vulkan 驱动）在构建期需要 glslangValidator
+把 BVH / ASTC 的 GLSL 计算着色器编成 SPIR-V。AOSP 树里 glslang 只以
+静态库形式存在（deqp_glslang_*，供 deqp 用），没有可执行模块，而 Soong
+的 genrule 沙箱禁止调用 PATH 上的系统 glslangValidator：
+
+    "glslangValidator" is not allowed to be used.
+    See https://android.googlesource.com/platform/build/+/main/Changes.md#PATH_Tools
+
+mesa 里 turnip 的 `subdir('bvh')` 是无条件的（vulkan runtime 侧则门控在
+prog_glslang.found() 上），所以"让 glslang 不可用"会导致
+`vk_bvh_include_dir` 未定义而生成失败 —— 正路是补上这个 host 工具。
+
+本补丁用树内已有的 glslang 静态库拼出 StandAlone 工具，模块名就叫
+glslangValidator，供 external/mesa3d/Android.bp 的 genrule 以
+`tools: ["glslangValidator"]` + `$(location glslangValidator)` 使用
+（合并脚本 scripts/mesa-bp-merge.py 会自动改写）。
+
+Apply to: external/deqp-deps/glslang/Android.bp（追加到文件末尾）
+
+--- a/Android.bp
++++ b/Android.bp
+@@ -- append at end of file --
++// ─── gaokun3: host 端 glslangValidator ───
++// mesa/turnip 构建期需要它把 GLSL 计算着色器编成 SPIR-V；Soong 沙箱不允许
++// 用 PATH 上的系统 glslangValidator，AOSP 树里又只有静态库，故在此补出可执行模块。
++cc_binary_host {
++    name: "glslangValidator",
++    defaults: [
++        "deqp_glslang_defaults",
++    ],
++    srcs: [
++        "StandAlone/StandAlone.cpp",
++    ],
++    local_include_dirs: [
++        "StandAlone",
++    ],
++    static_libs: [
++        "deqp_glslang_glslang",
++        "deqp_glslang_MachineIndependent",
++        "deqp_glslang_GenericCodeGen",
++        "deqp_glslang_OSDependent",
++        "deqp_glslang_ResourceLimits",
++        "deqp_glslang_SPIRV",
++        "deqp_glslang_SPVRemapper",
++    ],
++    cppflags: [
++        "-Wno-unused-result",
++    ],
++}

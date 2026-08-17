@@ -1,0 +1,47 @@
+// ─── gaokun3: 把 turnip 静态库打成 Android Vulkan HAL 共享库 ───
+//
+// meson_to_hermetic 只生成了 cc_library_static "vulkan_freedreno"（对应
+// meson 的 libvulkan_freedreno）。Android 的 Vulkan 加载器要的是
+//   /vendor/lib64/hw/vulkan.<ro.hardware.vulkan>.so
+// 里面导出 HAL_MODULE_INFO_SYM（mesa 在 src/vulkan/runtime/vk_android_hal.c
+// 里提供，已编进 vulkan_lite_runtime）。这里补出那个共享库。
+//
+// 属性说明：
+//   stem + relative_install_path  → 安装成 hw/vulkan.freedreno.so
+//   vendor: true                  → 装进 /vendor（vendor 分区的 HAL）
+//   whole_static_libs             → 必须 whole，否则 HAL_MODULE_INFO_SYM
+//                                   这种"没人引用的导出符号"会被链接器丢掉
+cc_library_shared {
+    name: "vulkan.freedreno",
+    stem: "vulkan.freedreno",
+    relative_install_path: "hw",
+    vendor: true,
+    host_supported: false,
+    // turnip 只生成 arm64 变体（gaokun.toml 里 cpu_family=aarch64）；
+    // 不限制的话 Soong 会顺带编 32 位，链接时因缺少同架构的静态依赖而
+    // 报一堆 undefined symbol（vk_format_aspects / util_format_* 等）。
+    compile_multilib: "64",
+    whole_static_libs: [
+        "vulkan_freedreno",
+    ],
+    shared_libs: [
+        "libcutils",
+        "libdrm",
+        "libhardware",
+        "liblog",
+        "libnativewindow",
+        "libsync",
+        "libz",
+    ],
+    header_libs: [
+        "hwvulkan_headers",
+    ],
+    cflags: [
+        "-DVK_USE_PLATFORM_ANDROID_KHR",
+    ],
+    ldflags: [
+        // mesa 的 Android 版本脚本：只导出 HAL_MODULE_INFO_SYM 与
+        // vk_icdGetInstanceProcAddr 等入口
+        "-Wl,--build-id=sha1",
+    ],
+}

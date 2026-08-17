@@ -140,7 +140,6 @@ PRODUCT_PROPERTY_OVERRIDES += \
 PRODUCT_PROPERTY_OVERRIDES += \
     persist.graphics.egl=angle
 PRODUCT_VENDOR_PROPERTIES += \
-    ro.hardware.vulkan=pastel \
     debug.hwui.renderer=skiagl
 
 # ⚠️ 软渲染（SwiftShader）导入不了 UBWC 压缩 buffer —— SF 崩于
@@ -214,3 +213,50 @@ PRODUCT_SOONG_NAMESPACES += device/generic/goldfish
 
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/wifi/wpa_supplicant.conf:$(TARGET_COPY_OUT_VENDOR)/etc/wifi/wpa_supplicant.conf
+
+# ─── Stage 4/5: 固件双路安装 ───
+# 新增固件（从本机 Ubuntu /lib/firmware 提取，华为专有，不入版本库）：
+#   qcdxkmsuc8280.mbn   GPU zap shader（freedreno 必需，缺则 GPU 锁在安全模式）
+#   audioreach-tplg.bin 音频拓扑（缺则声卡不注册）
+#   *.jsn               pd_mapper 服务表
+PRODUCT_COPY_FILES += \
+    $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/qcdxkmsuc8280.mbn:$(TARGET_COPY_OUT_VENDOR)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/qcdxkmsuc8280.mbn \
+    $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/audioreach-tplg.bin:$(TARGET_COPY_OUT_VENDOR)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/audioreach-tplg.bin \
+    $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/qcvss8280.mbn:$(TARGET_COPY_OUT_VENDOR)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/qcvss8280.mbn \
+    $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/adspr.jsn:$(TARGET_COPY_OUT_VENDOR)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/adspr.jsn \
+    $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/adspua.jsn:$(TARGET_COPY_OUT_VENDOR)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/adspua.jsn \
+    $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/battmgr.jsn:$(TARGET_COPY_OUT_VENDOR)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/battmgr.jsn \
+    $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/cdspr.jsn:$(TARGET_COPY_OUT_VENDOR)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/cdspr.jsn
+
+# ramdisk 副本：让 remoteproc/GPU/BT 在 /vendor 挂载前的首次 probe 就拿到固件
+# （ramdisk 是第一阶段 rootfs，firmware_class.path 找不到会回落 /lib/firmware）
+PRODUCT_COPY_FILES += \
+    $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/qcadsp8280.mbn:ramdisk/lib/firmware/qcom/sc8280xp/HUAWEI/gaokun3/qcadsp8280.mbn \
+    $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/qccdsp8280.mbn:ramdisk/lib/firmware/qcom/sc8280xp/HUAWEI/gaokun3/qccdsp8280.mbn \
+    $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/qcslpi8280.mbn:ramdisk/lib/firmware/qcom/sc8280xp/HUAWEI/gaokun3/qcslpi8280.mbn \
+    $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/qcdxkmsuc8280.mbn:ramdisk/lib/firmware/qcom/sc8280xp/HUAWEI/gaokun3/qcdxkmsuc8280.mbn \
+    $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/audioreach-tplg.bin:ramdisk/lib/firmware/qcom/sc8280xp/HUAWEI/gaokun3/audioreach-tplg.bin \
+    $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/qcvss8280.mbn:ramdisk/lib/firmware/qcom/sc8280xp/HUAWEI/gaokun3/qcvss8280.mbn \
+    $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/adspr.jsn:ramdisk/lib/firmware/qcom/sc8280xp/HUAWEI/gaokun3/adspr.jsn \
+    $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/adspua.jsn:ramdisk/lib/firmware/qcom/sc8280xp/HUAWEI/gaokun3/adspua.jsn \
+    $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/battmgr.jsn:ramdisk/lib/firmware/qcom/sc8280xp/HUAWEI/gaokun3/battmgr.jsn \
+    $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/cdspr.jsn:ramdisk/lib/firmware/qcom/sc8280xp/HUAWEI/gaokun3/cdspr.jsn
+
+PRODUCT_COPY_FILES += \
+    $(LOCAL_PATH)/firmware/qca/wcnhpbtfw21.tlv:ramdisk/lib/firmware/qca/wcnhpbtfw21.tlv \
+    $(LOCAL_PATH)/firmware/qca/wcnhpnv21g.bin:ramdisk/lib/firmware/qca/wcnhpnv21g.bin
+
+# ─── Stage 5 Phase B: 硬件 Vulkan（turnip / freedreno on 主线 msm DRM）───
+# 构建流程见 docs/stage5-freedreno.md：
+#   1. scripts/mesa-tool-fixes.py     补 meson_to_hermetic 与 mesa 25.3 的 API 落差
+#   2. 生成器 + scripts/mesa-bp-merge.py 产出 external/mesa3d/Android.bp
+#   3. mesa/turnip-shared.bp.in       把静态库包成 Android Vulkan HAL 共享库
+# GLES 仍由 ANGLE 提供，但它的 Vulkan 后端从此跑在 Adreno 690 上而不是 SwiftShader。
+# ⚠️ GPU 需要 zap shader 固件 qcdxkmsuc8280.mbn（见上面的固件双路安装），
+#    缺了它 GPU 停在安全模式，adreno probe 会失败。
+PRODUCT_PACKAGES += \
+    vulkan.freedreno
+
+# 排障开关：想回软渲染就把这行改成 pastel（vulkan.pastel 包仍然装着）
+PRODUCT_VENDOR_PROPERTIES += \
+    ro.hardware.vulkan=freedreno

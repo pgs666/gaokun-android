@@ -132,6 +132,40 @@ APEX → BT 应用起来就 LOG(FATAL) 崩溃循环（100 个墓碑，会喂 Res
 下一场双修：(a) 加 BT HCI HAL APEX；(b) hci_qca 固件竞速同 #28
 （4.6s 就要 qca/wcnhpbtfw21.tlv，晚绑定或 rc 重触发）。
 
+## #31 缺的固件其实一直躺在本机 Ubuntu 里 ✅ 已取用
+
+排音频"无声卡"时顺手挖到的大礼包 —— Ego 的 Ubuntu 根（U 盘 sda2）的
+`/lib/firmware/qcom/sc8280xp/HUAWEI/gaokun3/` 下有我们缺的全部华为专有件：
+
+| 文件 | 作用 | 缺了会怎样 |
+|---|---|---|
+| `qcdxkmsuc8280.mbn` | **GPU zap shader** | GPU 停在安全模式，freedreno 不可用（dmesg 刷 `adreno_zap_shader_load *ERROR*`）|
+| `audioreach-tplg.bin` | **音频拓扑** | 声卡不注册 |
+| `adspr.jsn` / `adspua.jsn` / `cdspr.jsn` / `battmgr.jsn` | pd_mapper 服务表 | ADSP 服务注册不全 |
+| `qcvss8280.mbn` | 语音 DSP | （暂未用到）|
+
+**教训**：这台机器的"专有固件从哪来"问题，答案不一定是 Windows 驱动包 ——
+gaokun 社区的 Linux 镜像早就把它们凑齐了，本机 Ubuntu 就是现成的固件来源。
+以后缺任何 blob，先 `mount /dev/block/sda2` 翻一眼再说。
+（Android 侧要 `CONFIG_USB_STORAGE=y` 才看得见 U 盘，kb19 已开。）
+
+## #32 固件竞速的根治：ramdisk 副本 + AOSP 的 ELF 检查
+
+remoteproc（ADSP/CDSP/SLPI）、GPU zap shader、hci_qca 都在 `/vendor` 挂载前
+probe，而音频那条链的驱动全带 `suppress_bind_attrs`（`bind`/`unbind` 文件
+根本不存在），#28 那套"晚绑定补一刀"用不了。根治办法是让**首次 probe 就能
+拿到固件**：把固件也装进 ramdisk 的 `/lib/firmware/`（ramdisk 是第一阶段
+rootfs；cmdline 的 `firmware_class.path=/vendor/firmware/` 只是首选路径，
+找不到会回落到 `/lib/firmware`）。
+
+踩坑：AOSP 会拒绝 `PRODUCT_COPY_FILES` 里**目标路径含 `bin`/`lib`/`lib64`
+组件的 ELF 文件**（`found ELF prebuilt in PRODUCT_COPY_FILES`）。
+`.mbn` 固件本身就是 ELF 格式，而 ramdisk 目标必须落在 `/lib/firmware` →
+只能开官方逃生开关 `BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES := true`。
+（`/vendor/firmware/...` 不含 lib 组件，所以之前一直没触发。）
+
+副作用：ramdisk.img 从 1.5 MB 涨到 12 MB，可接受。
+
 ## #27 拔插 USB 后 adb 不重枚举（UCSI 角色老毛病，缓解：adb over TCP）
 
 拔掉 USB 线再插回后 gadget 不重新枚举，`adb devices` 空，需要整机
