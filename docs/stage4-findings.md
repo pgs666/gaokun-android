@@ -139,3 +139,12 @@ APEX → BT 应用起来就 LOG(FATAL) 崩溃循环（100 个墓碑，会喂 Res
 重启才恢复。与已知 UCSI PPM init 缺陷同源（dr_mode=otg 无 role 源
 时靠初始 fallback 落到 device 侧，拔插后没有事件源驱动它再切回）。
 Stage 4 电源/USB 项一并处理。
+
+---
+
+## 浸泡测试记录（2026-08-17 kb18 + build e）
+
+冷启动后连续运行 ~2 小时（挂机 + 每 10 分钟 adb 采样 12 轮）：
+崩溃 0（蓝牙禁用后 crash buffer 全程干净）、WiFi 全程在线、
+最高温 44.8°C / 尾声 35.3°C、负载均值 ~1.1。
+今日全部改动（gpio174 触摸、ath11k 晚绑定、wifi 栈、BT 禁用）无回归。
