@@ -74,6 +74,31 @@ pinctrl default 状态在 himax-spi probe 时施加（先于驱动发起的复�
   二进制流再离线解码（24 字节/事件：u64 sec, u64 usec, u16 type,
   u16 code, s32 value）
 
+## #28 ath11k 内置驱动的固件竞速 + hw2.1 目录映射 ✅ 已修复
+
+**现象**：kb18 后 PCI 域 0006 枚举成功（PWRSEQ 修复生效），但 ath11k
+probe 报 `Direct firmware load for ath11k/WCN6855/hw2.1/amss.bin failed
+with error -2` → `-110` 永久失败，无 wlan0。
+
+**三层根因**
+1. **芯片是 wcn6855 hw2.1 不是 hw2.0**（dmesg `wcn6855 hw2.1`；
+   `ath11k/core.c` 的 hw_params 表把 hw2.1 硬映射到 `WCN6855/hw2.1` 目录）
+2. **上游 linux-firmware 没有 hw2.1 实体文件**——WHENCE 里是
+   `Link: ath11k/WCN6855/hw2.1/*.bin -> ../hw2.0/*.bin`，cgit 拉单文件 404。
+   vendor 分区不做软链，把 hw2.0 文件在 hw2.1 路径再装一份即可
+3. **内置(=y)驱动开机 ~5s 就 probe，/vendor 还没挂载**，request_firmware
+   直接 -2，probe 失败后无人重试（msm GPU 能活是因为它懒加载固件，
+   surfaceflinger 打开设备时 vendor 已在；ath11k 没这种运气）
+
+**修复**
+- device.mk：hw2.0 四件套同时装到 hw2.1 路径
+- init.gaokun3.rc：`on post-fs-data`（vendor 已挂载）时
+  `write /sys/bus/pci/drivers/ath11k_pci/bind "0006:01:00.0"` 手动补绑定
+
+**教训**：内置驱动 + vendor 固件 = 天然竞速。任何要固件的 =y 驱动都要
+检查它的固件加载时机（probe 时 vs 首次打开时），probe 时加载的一律需要
+晚绑定兜底。蓝牙 hci_qca 同样在 4.6s 吃了 -2（待 BT 阶段一并处理）。
+
 ## #27 拔插 USB 后 adb 不重枚举（UCSI 角色老毛病，待修）
 
 拔掉 USB 线再插回后 gadget 不重新枚举，`adb devices` 空，需要整机

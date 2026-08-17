@@ -34,3 +34,8 @@ on late-fs
 
 on post-fs-data
     mkdir /data/vendor 0771 root root
+
+# ath11k 内置驱动开机 5s 即 probe，/vendor 未挂载拿不到固件而永久放弃；
+# vendor 挂载后（post-fs-data）手动补一次 bind。见 docs/stage4-findings.md #28
+on post-fs-data
+    write /sys/bus/pci/drivers/ath11k_pci/bind "0006:01:00.0"

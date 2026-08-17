@@ -200,3 +200,14 @@ PRODUCT_COPY_FILES += \
 
 PRODUCT_VENDOR_PROPERTIES += \
     wifi.interface=wlan0
+
+# 实机芯片是 wcn6855 hw2.1（dmesg 实测）；上游 WHENCE 将 hw2.1 软链到 hw2.0，
+# vendor 里直接把 hw2.0 文件再装一份到 hw2.1 路径
+PRODUCT_COPY_FILES += \
+    $(LOCAL_PATH)/firmware/ath11k/WCN6855/hw2.0/amss.bin:$(TARGET_COPY_OUT_VENDOR)/firmware/ath11k/WCN6855/hw2.1/amss.bin \
+    $(LOCAL_PATH)/firmware/ath11k/WCN6855/hw2.0/board-2.bin:$(TARGET_COPY_OUT_VENDOR)/firmware/ath11k/WCN6855/hw2.1/board-2.bin \
+    $(LOCAL_PATH)/firmware/ath11k/WCN6855/hw2.0/m3.bin:$(TARGET_COPY_OUT_VENDOR)/firmware/ath11k/WCN6855/hw2.1/m3.bin \
+    $(LOCAL_PATH)/firmware/ath11k/WCN6855/hw2.0/regdb.bin:$(TARGET_COPY_OUT_VENDOR)/firmware/ath11k/WCN6855/hw2.1/regdb.bin
+
+# goldfish 命名空间：libwifi-hal-emu（mainline nl80211 通用 wifi HAL 实现）在里面
+PRODUCT_SOONG_NAMESPACES += device/generic/goldfish
