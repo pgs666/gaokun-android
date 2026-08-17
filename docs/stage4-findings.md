@@ -99,7 +99,41 @@ with error -2` → `-110` 永久失败，无 wlan0。
 检查它的固件加载时机（probe 时 vs 首次打开时），probe 时加载的一律需要
 晚绑定兜底。蓝牙 hci_qca 同样在 4.6s 吃了 -2（待 BT 阶段一并处理）。
 
-## #27 拔插 USB 后 adb 不重枚举（UCSI 角色老毛病，待修）
+## #29 WiFi 用户态四连坑（HAL 空壳 / FW_PATH 毒药 / supplicant 配置 / 国内验证墙）✅ 已修复
+
+kb18 内核就绪后（#26/#28），用户态又连过四关，全记录：
+
+1. **libwifi-hal 空壳**：不设 `BOARD_WLAN_DEVICE` 时链接 fallback 实现，
+   HAL `start()` 直接 Status 9。mainline nl80211 设备用
+   `BOARD_WLAN_DEVICE := emulator`（goldfish 实现，CF 同款），并且
+   **必须** `PRODUCT_SOONG_NAMESPACES += device/generic/goldfish`。
+2. **`WIFI_DRIVER_FW_PATH_STA := ""` 是毒药**：空串被字面编译进
+   libwifi-hal，configureChip 走 Broadcom 式固件模式切换 →
+   `Failed to change firmware mode` → chip 配置失败。这些变量
+   **完全不要定义**。
+3. **supplicant 缺配置文件**：AIDL `addStaInterface` 硬要求
+   `/data/vendor/wifi/wpa/wpa_supplicant.conf` 存在。goldfish 模板
+   （disable_scan_offload=1 等三行）装到 vendor，rc 开机 copy 过去。
+4. **国内连通性验证墙**：连接成功但框架访问 Google `generate_204`
+   失败 → `NETWORK_SELECTION_DISABLED_NO_INTERNET_PERMANENT` →
+   重启后永不自动回连（现象极具迷惑性：手动连每次都成）。
+   换 `captive_portal_https_url` 为国内可达端点即验证通过
+   （IS_VALIDATED），自动回连恢复。设置在 /data，重刷后要跑
+   `scripts/android-post-flash.sh`。
+
+**最终验收（2026-08-17）**：冷启动免手干预 → WiFi 自动连接 <SSID>
+（11ax，2401Mbps，RSSI -27）→ DHCP + IPv6 GUA → 公网 ping 17ms →
+adb over TCP（persist.adb.tcp.port=5555）双通道可用。
+
+## #30 蓝牙崩溃循环——无 HCI HAL，先禁用（待做）
+
+内核 BT 栈已 =y（kb18），但 vendor 没有 `com.android.hardware.bluetooth`
+APEX → BT 应用起来就 LOG(FATAL) 崩溃循环（100 个墓碑，会喂 RescueParty）。
+已 `settings put global bluetooth_on 0` 止血（进 post-flash 脚本）。
+下一场双修：(a) 加 BT HCI HAL APEX；(b) hci_qca 固件竞速同 #28
+（4.6s 就要 qca/wcnhpbtfw21.tlv，晚绑定或 rc 重触发）。
+
+## #27 拔插 USB 后 adb 不重枚举（UCSI 角色老毛病，缓解：adb over TCP）
 
 拔掉 USB 线再插回后 gadget 不重新枚举，`adb devices` 空，需要整机
 重启才恢复。与已知 UCSI PPM init 缺陷同源（dr_mode=otg 无 role 源

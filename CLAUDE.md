@@ -9,9 +9,15 @@
 
 > **Stage 4 触摸已于 2026-08-17 完成：触摸丝滑可用。**
 > 根因是 gpio174（模式选择脚）无人驱动，见 `docs/stage4-findings.md` #26
-> 和 `patches/0002-*.patch`。⚠️ 补丁目前只打在 ESP 的 DTB 上，
-> **下次 VM 构建内核前必须先应用进内核树的 DTS**，否则新 DTB 会退回坏状态。
-> 剩余：WiFi、音频、挂起/恢复（s2idle 醒不来）、UCSI 拔插 USB 后 adb 丢失（#27）。
+> 和 `patches/0002-*.patch`。✅ 补丁已应用进 VM 内核树（kb18 起自带）。
+>
+> **Stage 4 WiFi 已于 2026-08-17 完成：冷启动免干预自动连网。**
+> 内核 kb18（ath11k 全家 =y + PWRSEQ）+ 晚绑定 + goldfish wifi HAL +
+> supplicant 配置 + 国内验证端点，全程见 `docs/stage4-findings.md`
+> #28/#29。adb over TCP 已开（5555 端口，缓解 #27）。
+> ⚠️ 重刷 userdata 后必须跑 `scripts/android-post-flash.sh`。
+> 剩余：音频、蓝牙（#30，无 HCI HAL 暂禁用）、挂起/恢复（s2idle）、
+> UCSI 拔插（#27）、Ubuntu 侧 DTB 触摸补丁（等 USB_STORAGE=y 或进 Ubuntu 手做）。
 
 > **Stage 3 已于 2026-08-17 完成验收：Android 桌面完整渲染**
 > （Launcher3 + SystemUI 稳定，1600×2560，截图为证）。

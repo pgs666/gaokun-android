@@ -83,8 +83,11 @@ OUT="${1:?用法: $0 <kernel-out-dir>}"
     --enable MHI_BUS --enable MHI_BUS_PCI_GENERIC \
     --enable QCOM_QMI_HELPERS --enable PCI_PWRCTRL_PWRSEQ \
     --enable BT --enable BT_BREDR --enable BT_LE \
-    --enable BT_QCA --enable BT_HCIUART
+    --enable BT_QCA --enable BT_HCIUART \
+    --enable USB_STORAGE --enable USB_UAS
     `# BT_HCIUART_QCA 已默认 y（在 BT_HCIUART 之下）`
+    `# USB_STORAGE/UAS：Android 下能看见 USB 棒上的 Ubuntu ESP，`
+    `# 维护引导项/DTB 不用重启（kb18 仍是 =m，kb19 转正）`
 
 # ★ 最关键也最容易漏的一步：
 #   CONFIG_SECURITY_SELINUX=y 只是「编进内核」，不等于「被激活」。
