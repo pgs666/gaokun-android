@@ -92,9 +92,25 @@ BOARD_FLASH_BLOCK_SIZE := 262144
 # 没有 A/B，没有 fastboot，不做 OTA
 AB_OTA_UPDATER := false
 
+# ----------------------------------------------------- Stage 3: 图形栈
+# 模板：device/linaro/dragonboard/shared/graphics/（db845c = 树内同款高通主线）。
+#
+# ⚠️ 实测教训（2026-08-17）：AOSP 16 树内的 external/mesa3d 是 gfxstream 向
+# fork，【不含 freedreno】；BOARD_MESA3D_* / BOARD_USE_CUSTOMIZED_MESA 在
+# 本 manifest 里【无任何消费者】（grep 全树验证），设了会被静默忽略，
+# 且缺失的 PRODUCT_PACKAGES 因 ALLOW_MISSING_DEPENDENCIES 不报错。
+# → Phase A（现在）：swangle = ANGLE over SwiftShader Vulkan，纯树内，
+#   CPU 渲染先出画面（dragonboard/shared/graphics/swangle/ 同款）。
+# → Phase B（Stage 5 前）：引入 GloDroid 式 mesa 胶水构建 freedreno/turnip，
+#   参考平行项目（docs/parallel-mainline-generic.md）。
+PRODUCT_REQUIRES_INSECURE_EXECMEM_FOR_SWIFTSHADER := true
+
 # --------------------------------------------------------------- sepolicy
 # permissive 起步（cmdline 里也带了），但 policy 仍要能编过
 BOARD_VENDOR_SEPOLICY_DIRS += device/huawei/gaokun3/sepolicy
+# minigbm / swangle 的 sepolicy 直接复用 dragonboard 的（同一套 HAL）
+BOARD_VENDOR_SEPOLICY_DIRS += device/linaro/dragonboard/shared/graphics/minigbm_msm/sepolicy
+BOARD_VENDOR_SEPOLICY_DIRS += device/linaro/dragonboard/shared/graphics/swangle/sepolicy
 
 # --------------------------------------------------------------- VINTF
 DEVICE_MANIFEST_FILE := device/huawei/gaokun3/manifest.xml

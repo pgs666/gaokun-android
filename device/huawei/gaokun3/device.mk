@@ -50,6 +50,48 @@ PRODUCT_PACKAGES += \
     com.android.hardware.keymint.rust_nonsecure \
     com.android.hardware.gatekeeper.nonsecure
 
+# 软件 HAL 全家桶（hardware/interfaces 各 default 实现，模块名逐一核实）。
+# system_server 的 HAL 阶梯（每级都是实测 FATAL 后确认的）：
+#   BatteryService     ← IHealth（"instance default isn't available"）
+#   HintManagerService ← IPower（SupportInfo.headroom NPE）
+# thermal/memtrack/lights/vibrator 为预防性（cuttlefish 同款 example）。
+PRODUCT_PACKAGES += \
+    android.hardware.health-service.example \
+    android.hardware.power-service.example \
+    android.hardware.thermal-service.example \
+    android.hardware.memtrack-service.example \
+    android.hardware.lights-service.example \
+    android.hardware.vibrator-service.example
+
+# 音频 HAL（AIDL 示例实现，null 音频）—— audioserver 没有 HAL 会 NPE
+# 崩溃循环，而 system_server 主线程在 AudioService 构造时【同步阻塞】
+# 等 IAudioPolicyService，等不到就被看门狗处决 → zygote 全家轮回
+# （ANR trace 实锤，见 docs/stage2-findings.md）。audioserver 必须活。
+# Stage 4 换 tinyhal 真声卡时再替换。
+# ⚠️ example service 是 installable:false（bp 明写"installed in apex
+# com.android.hardware.audio"），直接列包名会被静默丢弃——用 APEX：
+PRODUCT_PACKAGES += \
+    com.android.hardware.audio
+
+# effects HAL 启动即退（"config file audio_effects_config.xml not found"，
+# 实测）。默认配置的 prebuilt_etc 被 soong config 门控着
+# （hardware/interfaces/audio/aidl/default/Android.bp:372-378）：
+$(call soong_config_set_bool,hardware_interfaces_audio,use_default_audio_effects_config,true)
+PRODUCT_PACKAGES += \
+    audio_effects_config.xml
+
+# 音频 policy 配置 —— example HAL 的 IModule 实例清单【完全来自】
+# audio_policy_configuration.xml 解析结果（main.cpp:93-99 实名核实），
+# 没有它 HAL 只注册 IConfig，audioserver 等 IModule/default 永阻塞。
+# xml 抄 cuttlefish（同款 HAL），XInclude 相对路径要求全家同目录：
+PRODUCT_COPY_FILES += \
+    $(LOCAL_PATH)/audio/audio_policy_configuration.xml:$(TARGET_COPY_OUT_VENDOR)/etc/audio_policy_configuration.xml \
+    $(LOCAL_PATH)/audio/primary_audio_policy_configuration.xml:$(TARGET_COPY_OUT_VENDOR)/etc/primary_audio_policy_configuration.xml \
+    frameworks/av/services/audiopolicy/config/r_submix_audio_policy_configuration.xml:$(TARGET_COPY_OUT_VENDOR)/etc/r_submix_audio_policy_configuration.xml \
+    frameworks/av/services/audiopolicy/config/bluetooth_with_le_audio_policy_configuration_7_0.xml:$(TARGET_COPY_OUT_VENDOR)/etc/bluetooth_with_le_audio_policy_configuration_7_0.xml \
+    frameworks/av/services/audiopolicy/config/audio_policy_volumes.xml:$(TARGET_COPY_OUT_VENDOR)/etc/audio_policy_volumes.xml \
+    frameworks/av/services/audiopolicy/config/default_volume_tables.xml:$(TARGET_COPY_OUT_VENDOR)/etc/default_volume_tables.xml
+
 # ------------------------------------------------------------------ 固件
 # [measured] 全部来自 Stage 0 的 dmesg 固件加载路径。
 # 配合 cmdline 里的 firmware_class.path=/vendor/firmware/，
@@ -65,9 +107,76 @@ PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/qccdsp8280.mbn:$(TARGET_COPY_OUT_VENDOR)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/qccdsp8280.mbn \
     $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/qcslpi8280.mbn:$(TARGET_COPY_OUT_VENDOR)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/qcslpi8280.mbn
 
+# ------------------------------------------------- Stage 3: 图形栈
+# 全套照抄 device/linaro/dragonboard/shared/graphics/（db845c 同款），
+# 属性名/包名均为树内实名，非记忆。density 用我们实测的 240（不抄他家 160）。
+
+# gralloc：minigbm，platform=msm 是高通 UBWC 后端
+# （external/minigbm/Android.bp 的 soong_config_variable("minigbm","platform")）
+$(call soong_config_set,minigbm,platform,msm)
+PRODUCT_PACKAGES += \
+    android.hardware.graphics.allocator-service.minigbm \
+    mapper.minigbm
+PRODUCT_PROPERTY_OVERRIDES += \
+    ro.hardware.gralloc=minigbm
+
+# hwcomposer：drm_hwcomposer 的 HWC3 APEX
+PRODUCT_PACKAGES += \
+    com.android.hardware.graphics.composer.drm_hwcomposer
+
+# GLES/Vulkan：Phase A = swangle（ANGLE over SwiftShader，纯树内 CPU 渲染）。
+# ⚠️ 树内 mesa3d 不含 freedreno（见 BoardConfig 注释），Phase B 再换。
+# 模板：dragonboard/shared/graphics/swangle/device.mk（db845c 同款）。
+PRODUCT_PACKAGES += \
+    libEGL_angle \
+    libGLESv1_CM_angle \
+    libGLESv2_angle \
+    vulkan.pastel
+PRODUCT_PROPERTY_OVERRIDES += \
+    ro.opengles.version=196608
+# ⚠️ ANGLE 库在 /system/lib64/ 根（AOSP 16 默认自带，不在 egl/ 子目录），
+# 加载开关是 persist.graphics.egl（Loader.cpp:67-70 实名核实），
+# ro.hardware.egl 走的是 egl/libEGL_*.so 搜索路径，对 ANGLE 不生效。
+PRODUCT_PROPERTY_OVERRIDES += \
+    persist.graphics.egl=angle
+PRODUCT_VENDOR_PROPERTIES += \
+    ro.hardware.vulkan=pastel \
+    debug.hwui.renderer=skiagl
+
+# ⚠️ 软渲染（SwiftShader）导入不了 UBWC 压缩 buffer —— SF 崩于
+# "Failed to create a valid texture"（GaneshBackendTexture 导入
+# AHardwareBuffer 失败，tombstone_48 实测）。强制 minigbm 分配线性 buffer。
+# 来源：dragonboard minigbm_msm/device.mk 的 TARGET_USES_SWR 分支。
+# Phase B 换 freedreno 后删掉这行（GPU 认 UBWC，还能提性能）。
+PRODUCT_VENDOR_PROPERTIES += \
+    vendor.minigbm.debug=nocompression
+
+# ⚠️ simpledrm 先占 card0 后被 msm 顶替，msm 的 KMS 节点是 card1；
+# drm_hwcomposer 默认扫 card0 会进无头模式（"No pipelines available"）。
+# 活体实测：设此属性 + 重启 hwc 后 SF 立即拿到 Primary display
+# 1600x2560@120Hz。属性名从 hwc3 二进制 strings 核实。
+PRODUCT_VENDOR_PROPERTIES += \
+    vendor.hwc.drm.device=/dev/dri/card1
+
+# 慢设备处方（SwiftShader CPU 渲染下时序没有余量）：
+# 看门狗/ANR 超时统一 ×5。cycle-1 的 AudioService 等 audioserver 发布
+# 差几十秒被 60s 看门狗击杀 → 级联轮回（ANR 实锤）。Phase B 换
+# freedreno 后可降回 2 或删除。
+PRODUCT_VENDOR_PROPERTIES += \
+    ro.hw_timeout_multiplier=5
+
+# 硬件 feature 声明 —— 没有它 AppWidgetService 等一票系统服务不启动，
+# Launcher 直接 NPE（"AppWidgetManager...on a null object" 实测）。
+PRODUCT_COPY_FILES += \
+    frameworks/native/data/etc/tablet_core_hardware.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/tablet_core_hardware.xml
+
+PRODUCT_COPY_FILES += \
+    frameworks/native/data/etc/android.hardware.opengles.aep.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.opengles.aep.xml \
+    frameworks/native/data/etc/android.hardware.vulkan.level-1.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.vulkan.level.xml \
+    frameworks/native/data/etc/android.hardware.vulkan.version-1_1.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.vulkan.version.xml
+
 #
-# Stage 2 刻意不装的东西（Stage 3/4 再逐个加，每次只加一个）：
-#   图形   minigbm(cros_gralloc) + drm_hwcomposer_hwc3 + mesa3d  <- 三者已在树内
+# Stage 3 之后再加（每次只加一个）：
 #   音频   tinyhal（refs/aospm-tinyhal），源是 LENOVO-X13s.conf / sc8280xp.conf
 #   WiFi   wpa_supplicant + ath11k
 #   传感器 / 相机 / 振动

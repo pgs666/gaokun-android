@@ -5,6 +5,10 @@
 # Stage 2 只要 adb，但 full_base 让 Stage 3 不必重做 product 定义。
 #
 
+# dalvik 堆：不配则 system_server 只有 16MB growth limit，boot 后必 OOM
+# （java.lang.OutOfMemoryError 实测）。用 10 寸平板标准档。
+$(call inherit-product, frameworks/native/build/tablet-10in-xhdpi-2048-dalvik-heap.mk)
+
 $(call inherit-product, $(SRC_TARGET_DIR)/product/core_64_bit.mk)
 $(call inherit-product, $(SRC_TARGET_DIR)/product/full_base.mk)
 $(call inherit-product, device/huawei/gaokun3/device.mk)

@@ -5,7 +5,14 @@
 在华为 MateBook E Go（Snapdragon 8cx Gen 3 / sc8280xp，代号 gaokun）上跑原生 AOSP，
 最终目标是能稳定运行 arm64 手游。
 
-**当前阶段：Stage 3（图形栈）**（每次开工时更新这一行）
+**当前阶段：Stage 4（输入/音频/WiFi/电源）**（每次开工时更新这一行）
+
+> **Stage 3 已于 2026-08-17 完成验收：Android 桌面完整渲染**
+> （Launcher3 + SystemUI 稳定，1600×2560，截图为证）。
+> 图形 = swangle 软渲染（Phase A）；Phase B 换 freedreno 见
+> `docs/parallel-mainline-generic.md` 路线图。
+> ⚠️ 已确认坑：闲置 52 秒自动 s2idle 休眠后醒不来（CLAUDE.md 预言的
+> EC 挂起坑），临时用 `svc power stayon true` 顶着，Stage 4 正修。
 
 > Stage 0 / Stage 1 已于 2026-08-13 完成验收。
 > **Stage 2 已于 2026-08-17 完成验收：`adb shell` 通，Android 16 稳定运行**
@@ -129,7 +136,7 @@ qcom/sc8280xp/HUAWEI/gaokun3/qcslpi8280.mbn              SLPI
 | **0** ✅ | 主线 Linux 跑通 + 配好崩溃日志 + 采集素材 | 全部通过（pstore 走 efi_pstore） |
 | **1** ✅ | 内核转 Android 配置 | 全部通过（UDC 出现，主机端 `configured` 枚举）|
 | **2** ✅ | 引导链 + AOSP 启动 | **全部通过**（2026-08-17）：adb shell 通，keystore2/zygote/adbd 稳定运行。12 个问题的完整记录见 `docs/stage2-findings.md` |
-| **3** | 图形栈（minigbm + drm_hwcomposer + mesa） | 开机动画 → SystemUI 出画面 |
+| **3** ✅ | 图形栈（minigbm + drm_hwcomposer + swangle） | **全部通过**（2026-08-17）：桌面完整渲染。freedreno 留待 Phase B |
 | **4** | 输入 / 音频 / WiFi / 电源 | 触摸可用、有声音、能联网 |
 | **5** | 游戏适配 | 目标游戏能启动并稳定运行 |
 

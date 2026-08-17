@@ -598,6 +598,26 @@ USB_F_FS），bool 子项的 =y 不代表代码进了内核。**
 电气零事件）。运行时接口 `/sys/class/usb_role/a600000.usb-role-switch/role`
 可写且稳定（Ubuntu 实测），usb rc 在 post-fs-data + boot 各写一次 `device`。
 
+### 8.5 Stage 3 冲刺段的问题清单（13–19 号，全部实测定位）
+
+| # | 问题 | 实锤证据 | 修复 |
+|---|---|---|---|
+| 13 | AOSP 树内 mesa3d 无 freedreno，BOARD_MESA3D_* 无消费者 | 全树 grep 零命中 | Phase A 用 swangle（ANGLE+SwiftShader），Phase B 引 GloDroid 胶水 |
+| 14 | ANGLE 库在 /system/lib64 根，开关是 persist.graphics.egl | Loader.cpp:67 | 设该属性 |
+| 15 | SwiftShader 吃不下 UBWC buffer | GaneshBackendTexture tombstone | vendor.minigbm.debug=nocompression |
+| 16 | msm KMS 是 card1（simpledrm 占过 card0），hwc 扫 card0 无头 | "No pipelines available" | vendor.hwc.drm.device=/dev/dri/card1 |
+| 17 | 调试包装器 fd3 泄漏毒杀 zygote | "Not allowlisted (3): /init.out" | v18 包装器 spawn cat 后 exec 3>&- |
+| 18 | 主线无 ashmem，A16 的 memfd 兼容探测又需要 ACK shim | ioctl 探测失败 | 从 ACK 移植 staging ashmem 驱动（2 处 API 漂移修正）|
+| 19 | audioserver 全链（HAL apex→effects 配置→policy xml→AMS 时序）| 逐层 ANR/栈实锤 | com.android.hardware.audio APEX + use_default_audio_effects_config + cuttlefish policy xml 六件套 |
+| 20 | netd 需 xt_policy/quota/quota2（quota2 是 ACK 专有）| "Extension policy revision 0" | xt 全族 =y + 移植 xt_quota2 |
+| 21 | NetworkStats 的 synchronizeKernelRCU 用 AF_KEY socket | errno -97 EAFNOSUPPORT | CONFIG_NET_KEY=y（平行项目 defconfig 预告过）|
+| 22 | 慢设备时序无余量，60s 看门狗击杀 cycle-1 | ANR：AudioService 等发布 | ro.hw_timeout_multiplier=5 |
+| 23 | dalvik 堆默认 16MB，boot 后 system_server OOM | OutOfMemoryError growth limit 16777216 | 继承 tablet-10in dalvik-heap.mk |
+| 24 | 无硬件 feature 声明，AppWidgetService 缺席，Launcher NPE | getInstalledProviders null | tablet_core_hardware.xml |
+| 25 | 闲置 52s s2idle 休眠后不醒（CLAUDE.md 预言的 EC 坑）| "PM: suspend entry" 为日志绝笔 | 临时 svc power stayon；Stage 4 正修 |
+
+**Stage 3 验收（2026-08-17）：Android 桌面完整渲染，SystemUI + Launcher3 稳定。**
+
 ### 8.4 顺带确认的两件事
 
 - **`androidboot.usbcontroller` 现代 AOSP 已不读取** —— `strings` 在 AOSP 16 的
