@@ -1,0 +1,82 @@
+# Stage 4 实测问题记录（输入 / 音频 / WiFi / 电源）
+
+> 编号接续 `stage2-findings.md`（#1–#25 见彼处，含 Stage 3 冲刺）。
+> 本文档记录 Stage 4 的实测问题、根因与修复。
+
+---
+
+## #26 触摸屏"随机"死亡 / 幽灵触摸 —— gpio174 模式选择脚无人驱动 ✅ 已修复
+
+**现象（按时间线）**
+1. kb17 首启：触摸可用但有幻影触点（单指出现多 slot 散点）
+2. 60Hz 显示模式实验后：触摸彻底静默，evdev 零输出
+3. 冷断电重启后：空闲幽灵触点风暴（不碰屏每秒冒随机按下事件，
+   一次出现 6 个"手指"挤在 X≈877–1001 的窄带、Y 散布全屏），
+   真手指画线反而完全不上报
+4. 驱动重挂（unbind/bind）、`inplace_reset`、降 `peak_threshold` 至 400 都无效
+5. **跨内核持久**：Ubuntu 7.1.0-rc3（buildbot 原装内核 + 树内
+   himax_hx83121a_spi.ko）同样零输出——排除 Android 用户态、
+   排除我们的 7.2 内核构建差异
+6. Windows / BIOS 界面触摸始终正常
+
+**根因**
+`refs/linux-gaokun/README.MD` "Touchscreen / insights" 节：HX83121A
+级联 IC 在**触摸固件重载瞬间采样 gpio174** 决定宿主传输模式——
+低=SPI 原始数据模式（Linux 驱动要的），高=I2C HID 模式（UEFI/BIOS
+用的）。固件重载会在 TS 复位（gpio99）后自动触发，而**显示复位
+（gpio38）可能在驱动不知情时内部触发 TS 复位**。
+
+buildbot 和 linux-gaokun 两棵树的 DTS 都只配置了 gpio175（IRQ）和
+gpio99（复位），**gpio174 无人驱动**，电平全看 UEFI 退出时的遗留状态。
+UEFI 自己用 I2C 模式，所以经常遗留高电平 → IC 锁进 I2C HID 模式 →
+SPI 侧"探测成功但全聋"。KMS 模式切换（我们的 60Hz 实验）触发显示
+复位 → 固件静默重载 → 模式翻转，营造出"随机死亡"的假象。
+
+**修复**
+DTS `ts0_default` pinctrl 加一组：
+
+```dts
+mode-pins {
+    pins = "gpio174";
+    function = "gpio";
+    output-low;
+};
+```
+
+见 `patches/0002-arm64-dts-gaokun3-drive-ts-mode-gpio174-low.patch`。
+pinctrl default 状态在 himax-spi probe 时施加（先于驱动发起的复位→
+固件重载），且此后恒为低——任何后续面板复位引发的重载都落在 SPI 模式。
+
+**验证**
+- Ubuntu 活体实验：`gpioset --chip gpiochip4 --hold-period 20s 174=0`
+  期间重挂驱动 → 触摸完美（"非常跟手"）
+- Android：直接改 ESP 上的 DTB（dtc 反编译→插节点→回编译，备份为
+  `sc8280xp-huawei-gaokun3.dtb.bak-pre174`）→ "触摸非常丝滑"
+
+**遗留事项**
+- [ ] 下次开构建机时把补丁应用进 VM 内核树
+  （`~/gaokun/mainline-linux/arch/arm64/boot/dts/qcom/`），
+  之后构建的 DTB 才自带修复；目前只有 ESP 上的 DTB 是打过补丁的
+- [ ] Ubuntu 7.1/7.2 启动项各自引用的 DTB 还没打补丁（在 Android 下
+  无法挂 ESP 改，USB_STORAGE=m；下次进 Ubuntu 时用
+  `/home/user/gk3-gpio174.dts.txt` 同法处理）
+- [ ] 向 gaokun 社区（right-0903 / buildbot / mainline-generic live-ISO）
+  报告：他们的 DTS 同样缺 gpio174，live-ISO 用户会随机踩坑
+
+**诊断方法论沉淀**
+- IC 空闲 IRQ 速率是状态指纹：**≈显示扫描率（120Hz 面板 ≈117/s）=
+  SPI 原始模式正常流**；0/s = IC 停摆；与扫描率无关的风暴 + evdev
+  静默 = 模式错乱
+- 幽灵触点"整列电极同亮"（多 slot 同 X 窄带、Y 全屏散布）不一定是
+  充电噪声——本例拔线后依旧，是模式错乱下的乱码帧
+- **`timeout N getevent > file` 会因 stdio 块缓冲丢光输出**（SIGTERM
+  不冲刷）；采集 evdev 用 `timeout N cat /dev/input/eventX > file` 录
+  二进制流再离线解码（24 字节/事件：u64 sec, u64 usec, u16 type,
+  u16 code, s32 value）
+
+## #27 拔插 USB 后 adb 不重枚举（UCSI 角色老毛病，待修）
+
+拔掉 USB 线再插回后 gadget 不重新枚举，`adb devices` 空，需要整机
+重启才恢复。与已知 UCSI PPM init 缺陷同源（dr_mode=otg 无 role 源
+时靠初始 fallback 落到 device 侧，拔插后没有事件源驱动它再切回）。
+Stage 4 电源/USB 项一并处理。

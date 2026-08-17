@@ -7,6 +7,12 @@
 
 **当前阶段：Stage 4（输入/音频/WiFi/电源）**（每次开工时更新这一行）
 
+> **Stage 4 触摸已于 2026-08-17 完成：触摸丝滑可用。**
+> 根因是 gpio174（模式选择脚）无人驱动，见 `docs/stage4-findings.md` #26
+> 和 `patches/0002-*.patch`。⚠️ 补丁目前只打在 ESP 的 DTB 上，
+> **下次 VM 构建内核前必须先应用进内核树的 DTS**，否则新 DTB 会退回坏状态。
+> 剩余：WiFi、音频、挂起/恢复（s2idle 醒不来）、UCSI 拔插 USB 后 adb 丢失（#27）。
+
 > **Stage 3 已于 2026-08-17 完成验收：Android 桌面完整渲染**
 > （Launcher3 + SystemUI 稳定，1600×2560，截图为证）。
 > 图形 = swangle 软渲染（Phase A）；Phase B 换 freedreno 见
@@ -154,6 +160,13 @@ qcom/sc8280xp/HUAWEI/gaokun3/qcslpi8280.mbn              SLPI
 ## 已知坑
 
 - 触摸屏 I2C 模式有间歇性失灵，SPI 模式更稳
+- **触摸 IC 的工作模式由 gpio174 在固件重载瞬间的电平决定**（低=SPI 高=I2C HID），
+  上游两棵 DTS 都没配这个脚，全靠 UEFI 遗留电平碰运气；显示复位还会静默触发
+  固件重载。症状是"触摸随机死亡/幽灵触点风暴/驱动探测成功但全聋"。
+  修复=pinctrl 恒拉低，见 `patches/0002-*.patch` + `docs/stage4-findings.md` #26。
+  空闲 IRQ 速率是状态指纹：≈显示扫描率=正常；0=IC 停摆；乱=模式错乱。
+- **`timeout N getevent > 文件` 会因块缓冲丢光全部输出**——采集 evdev 要用
+  `cat /dev/input/eventX` 录二进制再离线解码。见 `docs/stage4-findings.md` #26 方法论。
 - EC 挂起/恢复：Android 的 suspend 模型比 Linux 激进，预期这里会先炸
 - ~~DSI panel 的 KMS plane 数量少时 drm_hwcomposer 会 fallback 到 GPU 合成~~
   ✅ **担心不成立。** 实测 **25 个 plane / 6 个 CRTC**，硬件合成资源充裕。
