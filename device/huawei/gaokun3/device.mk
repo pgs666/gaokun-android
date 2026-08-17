@@ -211,3 +211,6 @@ PRODUCT_COPY_FILES += \
 
 # goldfish 命名空间：libwifi-hal-emu（mainline nl80211 通用 wifi HAL 实现）在里面
 PRODUCT_SOONG_NAMESPACES += device/generic/goldfish
+
+PRODUCT_COPY_FILES += \
+    $(LOCAL_PATH)/wifi/wpa_supplicant.conf:$(TARGET_COPY_OUT_VENDOR)/etc/wifi/wpa_supplicant.conf
