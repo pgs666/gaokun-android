@@ -54,9 +54,8 @@ pinctrl default 状态在 himax-spi probe 时施加（先于驱动发起的复�
   `sc8280xp-huawei-gaokun3.dtb.bak-pre174`）→ "触摸非常丝滑"
 
 **遗留事项**
-- [ ] 下次开构建机时把补丁应用进 VM 内核树
-  （`~/gaokun/mainline-linux/arch/arm64/boot/dts/qcom/`），
-  之后构建的 DTB 才自带修复；目前只有 ESP 上的 DTB 是打过补丁的
+- [x] ~~下次开构建机时把补丁应用进 VM 内核树~~ ✅ 2026-08-17 已进
+  kb18（从源码编出的 DTB 与手术版 sha1 完全一致，零漂移）
 - [ ] Ubuntu 7.1/7.2 启动项各自引用的 DTB 还没打补丁（在 Android 下
   无法挂 ESP 改，USB_STORAGE=m；下次进 Ubuntu 时用
   `/home/user/gk3-gpio174.dts.txt` 同法处理）
