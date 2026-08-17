@@ -1,0 +1,59 @@
+From: gaokun-Android project
+Subject: [PATCH] tu: handle VkBindImageMemoryInfo with no memory for
+ Android native buffer images
+
+在 Android 上跑 turnip 时，任何 GL/Vulkan 应用一开始渲染就崩：
+
+    #00 vulkan.freedreno.so  tu_BindImageMemory2
+    #01 libvulkan.so         vulkan::driver::AcquireNextImageKHR
+    #02 libGLESv2_angle.so   rx::WindowSurfaceVk::prepareSwap
+    #07 libhwui.so           EglManager::queryBufferAge → beginFrame
+    signal 11 (SIGSEGV), fault addr 0x70, tid RenderThread >>> system_server <<<
+
+（system_server 的 RenderThread 一崩，整个框架 DeadSystemException 崩溃循环，
+永远进不了桌面。）
+
+原因：ANB（VkNativeBufferANDROID）图像的内存是在 **vkCreateImage** 里就由
+`vk_android_import_anb()` 导入并绑定好的（它自己会调一次 BindImageMemory2）。
+Android 平台的 libvulkan 在 swapchain 路径上会**再绑一次**，而这次
+`VkBindImageMemoryInfo::memory` 是 VK_NULL_HANDLE。turnip 的实现里这条路
+只有一句 TODO：
+
+    if (!mem) {
+    #if DETECT_OS_ANDROID
+       /* TODO handle VkNativeBufferANDROID */
+       UNREACHABLE("VkBindImageMemoryInfo with no memory");
+
+release 构建下 UNREACHABLE 展开成 __builtin_unreachable()，于是变成未定义
+行为 —— 表现为紧随其后的空指针解引用。
+
+修法：ANB 图像遇到"无 memory 的重复绑定"时按 no-op 成功返回（内存已在创建
+时绑好），仅对真正非法的情况保留 UNREACHABLE。
+
+Apply to: external/mesa3d/src/freedreno/vulkan/tu_image.cc
+
+--- a/src/freedreno/vulkan/tu_image.cc
++++ b/src/freedreno/vulkan/tu_image.cc
+@@ -913,8 +913,20 @@ tu_BindImageMemory2(VkDevice _device,
+       VK_FROM_HANDLE(tu_device_memory, mem, pBindInfos[i].memory);
+
+       if (!mem) {
+ #if DETECT_OS_ANDROID
+-         /* TODO handle VkNativeBufferANDROID */
++         /* Android's libvulkan re-binds swapchain images with a NULL memory
++          * handle: for VkNativeBufferANDROID images the memory was already
++          * imported and bound inside vkCreateImage (vk_android_import_anb),
++          * so this is a no-op.
++          */
++         if (vk_image_is_android_native_buffer(&image->vk)) {
++            const VkBindMemoryStatusKHR *anb_status =
++               vk_find_struct_const(pBindInfos[i].pNext,
++                                    BIND_MEMORY_STATUS_KHR);
++            if (anb_status)
++               *anb_status->pResult = VK_SUCCESS;
++            continue;
++         }
++
+          UNREACHABLE("VkBindImageMemoryInfo with no memory");
+ #else
+          const VkBindImageMemorySwapchainInfoKHR *swapchain_info =

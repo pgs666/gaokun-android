@@ -32,6 +32,19 @@ cc_library_shared {
         "libnativewindow",
         "libsync",
         "libz",
+        // u_gralloc 的 gralloc 元数据后端（turnip 的 Android WSI 靠它把
+        // ANativeWindowBuffer 导入成 VkImage）依赖这几个。
+        // ⚠️ 静态库里的 shared_libs 不会传播到最终共享库，必须在这里显式写：
+        //    - libui：IMapper5 后端（本机 ro.hardware.gralloc=minigbm，
+        //      /vendor/lib64/hw/mapper.minigbm.so 就是 stable-C IMapper5）。
+        //      少了它链接期报 android::Singleton<GraphicBufferMapper> 的静态成员
+        //    - libhidlbase/libutils/libgralloctypes/mapper@4.0：IMapper4 后端，
+        //      本机没有 HIDL mapper 服务，留着无害（编译期需要）
+        "libui",
+        "libhidlbase",
+        "libutils",
+        "libgralloctypes",
+        "android.hardware.graphics.mapper@4.0",
     ],
     header_libs: [
         "hwvulkan_headers",

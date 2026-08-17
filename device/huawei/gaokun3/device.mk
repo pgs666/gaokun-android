@@ -260,3 +260,7 @@ PRODUCT_PACKAGES += \
 # 排障开关：想回软渲染就把这行改成 pastel（vulkan.pastel 包仍然装着）
 PRODUCT_VENDOR_PROPERTIES += \
     ro.hardware.vulkan=freedreno
+
+# turnip 调试旗标加载器（快速迭代机制，见 docs/stage5-freedreno.md）
+PRODUCT_COPY_FILES += \
+    $(LOCAL_PATH)/bin/tu_debug_loader.sh:$(TARGET_COPY_OUT_VENDOR)/bin/tu_debug_loader.sh

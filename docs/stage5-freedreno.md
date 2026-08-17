@@ -116,6 +116,42 @@ CRLF/Windows 路径语法让 lark 报 `No terminal matches 'r'`。
     `compile_multilib: "64"`（turnip 只有 arm64 变体，否则 32 位链接缺符号）、
     并把 turnip 自己的 21 个静态依赖镜像进来（whole_static 不会自动带）
 
+### D2. 上机后的两个真机坑（不解决就开不进桌面）
+
+**1. `/dev/dri/renderD128` 权限**
+默认 `0660 system:graphics`，**应用进程**（GLES 经 ANGLE→Vulkan 也一样）打不开：
+
+```
+TU: tu_knl.cc:388: failed to open device /dev/dri/renderD128 (VK_ERROR_INCOMPATIBLE_DRIVER)
+libEGL: ANGLE Error … Internal Vulkan error (-3)
+```
+
+修：`device/huawei/gaokun3/ueventd.gaokun3.rc` 里给 `renderD*`/`card*` 设 0666
+（库存高通设备上 `/dev/kgsl-3d0` 也是 0666），装到 `/vendor/etc/ueventd.rc`。
+
+**2. gralloc 元数据后端是 turnip 的硬需求（不是可选项）**
+把 IMapper4/5 全关掉之后，turnip 在导入 `ANativeWindowBuffer` 时拿到空句柄：
+
+```
+#00 vulkan.freedreno.so  tu_BindImageMemory2
+#01 libvulkan.so         vulkan::driver::AcquireNextImageKHR
+#02 libGLESv2_angle.so   rx::WindowSurfaceVk::prepareSwap
+#07 libhwui.so           EglManager::queryBufferAge → beginFrame
+signal 11 (SIGSEGV) fault addr 0x70, tid RenderThread, >>> system_server <<<
+```
+
+RenderThread 一崩 system_server 就死，全系统跟着 `DeadSystemException`
+崩溃循环 —— 表现为"能看到 SurfaceFlinger 用上了 turnip，但永远进不了桌面"。
+
+正确取舍：**关 IMapper5、留 IMapper4**。
+- IMapper5 要 `android::Singleton<GraphicBufferMapper>` 的静态成员，libui 的
+  vendor 变体不导出（链接期报 `_ZN7android9SingletonINS_19GraphicBufferMapperEE…`）
+- IMapper4 走 HIDL mapper 4.0，依赖 `libgralloctypes` /
+  `android.hardware.graphics.mapper@4.0` / `libhidlbase` / `libutils`，
+  全是 vendor 可用的
+- ⚠️ 这些依赖要**显式写进共享库包装模块**：静态库里的 shared_libs 不会自动
+  传到包装模块，少了会报 `BpHwRefBase` 相关的 undefined symbol
+
 ### D. gralloc 元数据后端要 libui 的模板静态成员
 `u_gralloc_imapper5_api.cpp` 需要 `android::Singleton<GraphicBufferMapper>` 的
 静态成员，libui 的 vendor 变体不导出 →
@@ -123,6 +159,41 @@ CRLF/Windows 路径语法让 lark 报 `No terminal matches 'r'`。
 IMapper4/5 后端。本机 gralloc 是 minigbm（= CrOS gralloc），
 `u_gralloc_cros_api.c` 始终编译，够用；元数据后端只用于查压缩/modifier，
 而我们本来就跑 `vendor.minigbm.debug=nocompression`。
+
+## D3. GMU 死亡案（上机后最硬的骨头）
+
+**症状**：Android 启动 ~7 秒（开机动画/SF 首用 GPU），第一条 GPU 错误就是
+`HFI_H2F_MSG_GX_BW_PERF_VOTE timed out` → `GMU watchdog expired` → GMU 永久
+wedge（后续所有 `a6xx_gmu_resume` 都超时，恢复路径 `cx gdsc didn't collapse`
+也是坏的）→ 全系统 VK_ERROR_DEVICE_LOST 崩溃循环。
+
+**devcoredump 关键证据**（`comm: BootAnimation`）：`rbbm-status: 0x00000000`
+（GPU 核心空闲！）+ ring 积压 8 个提交没消费——**不是坏命令流挂 GPU，
+是电源管理层（GMU）死了**。
+
+**排除清单**（全部实测，方法论比结论值钱）：
+| 假设 | 实验 | 结果 |
+|---|---|---|
+| 内核构建问题 | Ubuntu 用户态 + 我们的 Image/DTB（禁模块）跑 vulkaninfo/kmscube | ✅ turnip 完好，GMU 零报错 → 内核洗清 |
+| 毒频点 OPP | devfreq userspace 扫全部 8 档（270–690MHz）满载 | 全过 |
+| 挂起/唤醒竞态 | 3 路并发开关 GPU + 混合渲染负载 | 全过 |
+| SF 帧节奏竞态 | 短爆发渲染 ×40 循环 | 全过 |
+| 固件不一致 | vendor vs /lib/firmware 哈希比对（a660_gmu/a660_sqe）| 位相同 |
+| 内核参数差异 | iommu.strict/passthrough 对齐 | 无效 |
+| 内核抢占开关 | `msm.enable_preemption=0` | 无效（内核照样接受 ALLOW_PREEMPT flag）|
+
+**现行主嫌**：turnip 25.3 的**抢占支持**。`tu_drm_has_preemption` 只要内核
+接受 `MSM_SUBMITQUEUE_ALLOW_PREEMPT` 就全队列开抢占并按可抢占方式编排命令流；
+Android 的不对称触发条件在于 **SurfaceFlinger 用高优先级上下文**、应用用默认
+优先级（Ubuntu 的测试客户端全是单一优先级，永远不触发跨优先级调度）。
+→ `patches/0005`：turnip 硬关 has_preemption。
+
+**快速迭代机制**（告别 15 分钟/次的重建循环）：init.gaokun3.rc 在
+post-fs-data 把 `/data/local/tmp/tu_debug` 内容装进 `debug.tu.debug` 属性
+（mesa 的 os_get_option 在 Android 按 `debug.`/`vendor.`/裸名读属性，
+`TU_DEBUG` → `tu.debug`）。此后 turnip 调试旗标实验 = 写文件 + 重启（2 分钟）。
+可用旗标：nobin sysmem gmem noubwc nolrz flushall syncdraw noconform 等
+（见 `tu_util.cc` 的 tu_debug_options 表）。
 
 ## 另一个必需件：GPU zap shader 固件
 

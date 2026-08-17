@@ -46,3 +46,10 @@ on property:sys.boot_completed=1
     write /sys/class/remoteproc/remoteproc0/state start
     write /sys/class/remoteproc/remoteproc1/state start
     write /sys/class/remoteproc/remoteproc2/state start
+
+# turnip 调试旗标（快速迭代机制 v3，见 docs/stage5-freedreno.md）：
+# 内核 cmdline 加 androidboot.tu_debug=<flags> → ro.boot.tu_debug →
+# 这里拷into debug.tu.debug（mesa os_get_option 读 debug. 前缀，
+# TU_DEBUG → tu.debug）。cmdline 里没给时该命令失败，无副作用。
+on post-fs-data
+    setprop debug.tu.debug ${ro.boot.tu_debug}

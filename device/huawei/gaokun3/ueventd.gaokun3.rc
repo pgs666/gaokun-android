@@ -1,6 +1,9 @@
-# ueventd.gaokun3.rc
-
-/dev/kgsl-3d0              0666   system     system
-/dev/dri/card0             0660   system     graphics
-/dev/dri/renderD128        0660   system     graphics
-/dev/ion                   0664   system     system
+# gaokun3 设备节点权限
+#
+# DRM 渲染节点：mesa/turnip 在**应用进程**里打开 /dev/dri/renderD128（GLES 经
+# ANGLE→Vulkan 也一样），默认 0660 system:graphics 应用打不开，日志会刷
+#   TU: tu_knl.cc: failed to open device /dev/dri/renderD128
+#       (VK_ERROR_INCOMPATIBLE_DRIVER)
+# 库存高通设备上对应的 /dev/kgsl-3d0 同样是 0666。
+/dev/dri/renderD*         0666   system     graphics
+/dev/dri/card*            0666   system     graphics
