@@ -221,3 +221,54 @@ logcat -b all | grep -i "VINTF manifest"
 
 `device.mk` 基本不动 —— 固件双路安装、fstab、init rc、ueventd、audio policy、
 WiFi、mesa/turnip 全部照用。
+
+## M1 执行记录：首次构建踩到的坑
+
+### 坑 1 — `android.hardware.thermal-service.example` 不存在
+
+```
+build/make/core/main.mk:1074: warning: device/huawei/gaokun3/lineage_gaokun3.mk
+    includes non-existent modules in PRODUCT_PACKAGES
+Offending entries:
+    android.hardware.thermal-service.example
+    vulkan.freedreno
+```
+
+模块**定义是在的**（`hardware/interfaces/thermal/aidl/default/Android.bp`），
+但那个 `cc_binary` 带 `installable: false`，binary 只出现在
+`apex "com.android.hardware.thermal"` 里 —— 和音频 HAL 完全同一套路。
+改为直接列 APEX 名即可。
+
+> 教训：AOSP 16 里越来越多 default HAL 被搬进 APEX，`-service.example`
+> 这种 binary 名会变成"存在但不可安装"。列包名前先看 bp 里有没有
+> `installable: false`。
+
+`vulkan.freedreno` 缺失是意料之中（mesa 管线要到 M3 才跑），M1 按计划
+先用 swangle：`ro.hardware.vulkan=pastel`，两处一起在 M3 打开。
+
+⚠️ kati 是**一次性列全**所有缺失模块的，所以第一轮报了哪几个，其余包名就都是好的。
+
+### 坑 2（审出来的，尚未被触发）— `deploy-android.sh` 直接 dd sparse 镜像
+
+`super.img` 默认是 Android sparse 格式（实测魔数 `3a ff 26 ed` = 0xED26FF3A），
+而 `scripts/deploy-android.sh` 一直是直接 `dd`。这会让 init 读不到 LP 元数据、
+挂载失败后主动复位，**且不留任何日志**（`docs/stage2-findings.md` 第 1 节的老坑）。
+
+一直没炸是因为实际在用的是 `scripts/deploy-from-ubuntu.sh`（它用 `simg2img`）。
+现已改为按魔数判断，两种格式都能正确写入。
+
+### 坑 3（同上，审出来的）— 远端路径里的 `~` 被本地展开
+
+`deploy-from-ubuntu.sh` 跑在 **Ego**（`/home/user`），但 `OUT` / `KEEP` 指的是
+**构建机**上的路径（`/home/vahiru`）。写成 `OUT=~/aosp/...` 会在 Ego 本地展开成
+`/home/user/aosp/...`，再去 `scp vahiru@vm:/home/user/aosp/...` —— 必然找不到。
+波浪号必须保持字面量，交给远端 shell 展开。
+
+### M2 的回退演练已经脚本化
+
+```bash
+# 在 Ego 的 Ubuntu 里
+bash deploy-from-ubuntu.sh rollback    # 刷回换轨前那套 AOSP 16
+```
+从构建机 `~/keep/aosp16-images/` 拉 super + ramdisk（sha256 校验过），
+内核/DTB 不用换 —— crDroid 和 AOSP 用的是同一个 kb21 内核。
