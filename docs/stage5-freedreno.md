@@ -429,3 +429,58 @@ devmem CB0+0x08 4 1       # CB_RESUME=TERMINATE：放掉卡住的事务
 4. **fault 本身**：terminate 后系统能继续渲染，暗示 fault 影响局部
    （疑 CP 预取越界 / ANB 导入映射尺寸不符）——下一场从 workaround 打出的
    FAR 地址与 devcd `bos:` 表交叉核对开始。
+
+## D7. 瓶颈转移：turnip 在 ANGLE dynamic-rendering 路径上的空指针（+ 一个属性名陷阱）
+
+D6 的 SMMU 解锁让 GPU 层彻底健康（**GMU 错误 0，持续 190s+，此前必进死循环**），
+SurfaceFlinger 恢复 60Hz vsync、SystemUI 起来了。但 `boot_completed` 仍不出——
+**瓶颈从内核死锁转移到 turnip 用户态崩溃**。
+
+### 崩溃签名
+
+```
+signal 11 (SIGSEGV), SEGV_MAPERR, fault addr 0xd0 (read)   ← NULL + 208
+#00 tu_cmd_render<(chip)6>(tu_cmd_buffer*, VkOffset2D const*)+324
+#01 tu_CmdEndRendering2EXT(...)+552
+#02 vk_common_CmdEndRendering+56
+#03 libGLESv2_angle.so  rx::vk::RenderPassCommandBufferHelper::flushToPrimary(...)
+#04..06 ANGLE  CommandPoolAccess::flushRenderPassCommands / ContextVk::flushCommandsAndEndRenderPass
+```
+
+**这条路径只有 Android 会走**：ANGLE 用 **dynamic rendering**
+（`vkCmdBeginRendering`/`EndRendering`）；Ubuntu 侧的 vkmark/vulkaninfo 用传统
+render pass，**永远不经过 `tu_CmdEndRendering2EXT`** —— Ubuntu 无敌的另一半原因
+（前一半是从不产生 SMMU fault）。
+
+`tu_CmdEndRendering2EXT` 本身对 `pRenderingEndInfo=NULL` 是安全的
+（`vk_find_struct_const` 容 NULL → `fdm_offsets=NULL`），所以不是参数问题；
+崩在 `tu_cmd_render` 内联体里读某个 NULL 指针的 +0xd0 字段
+（`cmd->state.pass` / `attachments` / `tiling` 一类渲染状态缺失）。
+
+### ⚠️ 陷阱：tu_debug 属性名一直是错的
+
+mesa `src/util/os_misc.c` 的 `os_get_android_option()`：
+`TU_DEBUG` 不以 `MESA_` 开头 → **加 `mesa.` 前缀** → 下划线转点、转小写
+→ `mesa.tu.debug` → 再依次试前缀 `debug.` / `vendor.` / `""`。
+
+→ **正确属性名是 `debug.mesa.tu.debug`**，而档案与 init.gaokun3.rc 里一直写的是
+`debug.tu.debug`。**结论：2026-08-18 之前所有 tu_debug 旗标实验的旗标从未生效**，
+"旗标全部无罪"的旧结论作废（`init.gaokun3.rc` 已修正，
+overlay 侧另有 `scripts/gmu-forensics/tudebug.rc`）。
+
+用正确属性名重做 `sysmem`（`use_sysmem_rendering()` 第一行就
+`if (TU_DEBUG(SYSMEM)) return true`，能跳过 `cmd->state.tiling->possible`
+那处解引用）：属性确认生效，但**崩溃点分毫未变**（同 +324/0xd0）→
+崩溃不在 tiling 检查里，位置更靠前或在 sysmem 分支内部。
+
+### 现状与下一步
+
+- GPU/内核层：**已解决**（SMMU workaround 常驻，GMU 零错误）
+- 用户态层：turnip 在 ANGLE dynamic-rendering 收尾路径上 NULL deref，
+  阻止 systemui/system_server 存活 → 系统起不来
+- 正在验证：`debug.hwui.renderer=skiavk` 让 HWUI 直连 Vulkan、**绕开 ANGLE**
+  （SurfaceFlinger 用 `debug.renderengine.backend=skiavkthreaded` 已证明
+  skia+turnip 这条路不崩）
+- 若绕行有效 → 系统可用，ANGLE 只留给纯 GLES 应用，turnip bug 单独修
+- 若无效 → 需源码级定位：VM 里给 turnip 编 debug 符号版，或对
+  `tu_cmd_render+324` 反汇编确认 +0xd0 是哪个字段，然后修 mesa（可提上游）

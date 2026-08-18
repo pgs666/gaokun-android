@@ -48,8 +48,12 @@ on property:sys.boot_completed=1
     write /sys/class/remoteproc/remoteproc2/state start
 
 # turnip 调试旗标（快速迭代机制 v3，见 docs/stage5-freedreno.md）：
-# 内核 cmdline 加 androidboot.tu_debug=<flags> → ro.boot.tu_debug →
-# 这里拷into debug.tu.debug（mesa os_get_option 读 debug. 前缀，
-# TU_DEBUG → tu.debug）。cmdline 里没给时该命令失败，无副作用。
+# 内核 cmdline 加 androidboot.tu_debug=<flags> → ro.boot.tu_debug → 下面的属性。
+# ⚠️ 属性名按 mesa src/util/os_misc.c os_get_android_option() 推导：
+# TU_DEBUG 不以 MESA_ 开头 → 加 "mesa." 前缀 → 下划线转点+转小写
+# → "mesa.tu.debug" → 依次试前缀 "debug." / "vendor." / ""。
+# 所以必须是 debug.mesa.tu.debug —— 曾误写 debug.tu.debug，导致 2026-08-18
+# 之前所有 tu_debug 实验的旗标从未生效（"旗标全部无罪"的旧结论因此作废）。
+# cmdline 里没给时该命令失败，无副作用。
 on post-fs-data
-    setprop debug.tu.debug ${ro.boot.tu_debug}
+    setprop debug.mesa.tu.debug ${ro.boot.tu_debug}
