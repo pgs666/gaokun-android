@@ -5,7 +5,34 @@
 在华为 MateBook E Go（Snapdragon 8cx Gen 3 / sc8280xp，代号 gaokun）上跑原生 AOSP，
 最终目标是能稳定运行 arm64 手游。
 
-**当前阶段：Stage 5（GPU 已通，正做音频/蓝牙）**（每次开工时更新这一行）
+**当前阶段：硬件全线打通（GPU/音频/蓝牙/WiFi/触摸），准备转 crDroid**（每次开工时更新这一行）
+
+> **★决策（2026-08-19）：硬件使能告一段落，下一步转 crDroid 移植。**
+> 理由：剩下卡住的东西（App/媒体没声音）**不是硬件或内核问题**，
+> 而是这棵手搓最小 AOSP 缺产品级配置 —— `MediaCodecList` 是空的
+> （`/vendor/etc/media_codecs.xml` 原本不存在，拷进去仍空，
+> `ro.media.xml_variant.*` 全未设）、`/system/media/audio/` 整个缺失
+> （铃声/UI 音效一个没有）。这些是 Lineage/crDroid 设备树的标准组成部分，
+> 换轨后大概率自动消失。详见 `docs/stage4-findings.md` #36。
+> - **已定：直接上 crDroid**（不先过 Lineage）；构建机磁盘方案待 `df` 后定。
+> - **可平移的成果（换 ROM 不用重做）**：kb21 内核配置 +
+>   `scripts/kernel-config-android.sh` 的断言、DTB（含 gpio174 触摸补丁）、
+>   固件集与 audioreach 拓扑固件的**正确路径名**、mesa turnip
+>   `apply-0004v3.py`（ANB 延迟绑定，纯 mesa 修复）、
+>   `smmu-nostall.sh`（SMMU stall workaround）、
+>   `audio-route.sh`（混音器路由）、蓝牙用 AOSP 原装 HAL 即可、
+>   以及 docs/ 里全部踩坑记录。
+> - **要重做的**：Lineage 布局的设备树、UEFI 引导集成（无 fastboot）、
+>   整棵 ROM 的构建。参考 `docs/parallel-mainline-generic.md`（同款内核的
+>   Lineage 系平行项目，可借它的 gaokun3 配置）。
+
+> **Stage 4 音频/蓝牙已于 2026-08-19 完成（硬件层）**：
+> 声卡 `SC8280XP-HUAWEI-GAOKUN3` 注册、内置扬声器实机出声（用户确认，
+> 整曲播放通过）；蓝牙 adapter `state: ON`、地址从芯片读出、零崩溃。
+> 三个 `=m` 断点（LPASS pinctrl ×2 + LPASS 时钟）+ 未编的 `SND_SOC_WSA883X`
+> + 拓扑固件路径名 + `RT_GROUP_SCHED=y`（挡住蓝牙的 SCHED_FIFO）——
+> 全部记在 `docs/stage4-findings.md` #33–#36。
+> ⚠️ 起停爆音源是功放 BOOST 升压器（A/B 实听定案），默认已关。
 
 > **Stage 5 GPU 战况（2026-08-19 凌晨）：★GPU 攻坚完成 —— Android 用硬件
 > turnip 启动进桌面，SMMU fault 归零，帧读回正常。** 案卷
