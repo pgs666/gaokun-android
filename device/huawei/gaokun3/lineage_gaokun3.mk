@@ -21,10 +21,32 @@ $(call inherit-product, frameworks/native/build/tablet-10in-xhdpi-2048-dalvik-he
 # 64 位为主 + 32 位兼容（手游 arm64-v8a 直跑，但 armeabi-v7a 也要能装）
 $(call inherit-product, $(SRC_TARGET_DIR)/product/core_64_bit.mk)
 
-# crDroid 的「平板 + 无 modem」组合：
+# ★ AOSP 基座 —— 必须由设备树自己提供。
+#
+# 2026-08-19 实测教训：我一度以为 crDroid 自带整套应用，叠 full_base 会撞包，
+# 于是把它拿掉了。结果构建"成功"但产物是空壳：
+#     system.img 只有 29.8 MB（旧 AOSP 那份是 1.0 GB），
+#     /system 里没有 apex/、没有 app/、连 framework/services.jar 都不存在。
+#
+# 原因：vendor/lineage/ 下的所有配置都是【补充】性质的 ——
+#   common.mk        只 inherit vendor/extra、crdroid.mk、vendor/addons、audio.mk
+#   common_mobile.mk 只补 frameworks/base/data/sounds/AudioPackage14.mk
+#   tablet.mk        只补 $(SRC_TARGET_DIR)/product/large_screen_common.mk
+# 整个 vendor/lineage/config/*.mk 里对 SRC_TARGET_DIR 的引用只有 tablet.mk 那一处。
+# 也就是说 LineageOS/crDroid 的设备树【本来就该】自己 inherit 一个 AOSP base 产品，
+# 这也是上游设备树模板的标准写法。
+#
+# full_base.mk 的链条（本地实读）：
+#   full_base → generic_no_telephony → handheld_{system,system_ext,vendor,product}
+#            → media_vendor → base_vendor（vendor_compatibility_matrix.xml、
+#              shell_and_utilities_vendor = /vendor/bin/sh + toybox_vendor …）
+#   full_base 还带 frameworks/base/data/sounds/AllAudio.mk（铃声）
+# 正是我们旧的 aosp_gaokun3.mk 用过、并产出可用镜像的那条链。
+$(call inherit-product, $(SRC_TARGET_DIR)/product/full_base.mk)
+
+# crDroid 的「平板 + 无 modem」组合（叠在 AOSP 基座之上）：
 #   common_full_tablet_wifionly.mk = common_mobile_full + tablet + wifionly
-# ⚠️ 刻意【不】再 inherit AOSP 的 full_base.mk —— crDroid 自带整套应用
-#    （Launcher3/Settings/Dialer…），叠 full_base 会撞包。
+# Lineage 侧用 LOCAL_OVERRIDES_PACKAGES 顶掉 AOSP 的同类应用，不会真的撞包。
 $(call inherit-product, vendor/lineage/config/common_full_tablet_wifionly.mk)
 
 # 设备配置（固件、init rc、HAL、图形、WiFi、音频 —— Stage 2–5 的全部成果）

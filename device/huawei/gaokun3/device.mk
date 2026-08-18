@@ -7,27 +7,9 @@
 
 LOCAL_PATH := device/huawei/gaokun3
 
-# ─────────────────────── vendor 分区基础件（Stage 6 必补）───────────────────────
-# crDroid 的产品链（common_full_tablet_wifionly → common_mobile_full →
-# common_mobile → common.mk）【不继承】AOSP 的 base_vendor.mk。
-# 我们旧的 aosp_gaokun3.mk 是经 full_base.mk 间接拿到它的，换轨后没了。
-#
-# 缺了它，vendor 分区会少掉整块 "Base modules for the vendor partition"，
-# 2026-08-19 实测到两个致命项：
-#   vendor_compatibility_matrix.xml  → checkvintf 在 97% 处
-#                                      "ERROR: Cannot fetch vendor matrix." 中止构建
-#   shell_and_utilities_vendor       → /vendor/bin/sh 与 toybox_vendor 都不存在，
-#                                      而 bin/audio-route.sh 的 shebang 就是
-#                                      #!/vendor/bin/sh —— 开机路由脚本会直接 exec 失败
-# 还有 fs_config_{files,dirs}_nonsystem、passwd/group_vendor、gralloc.default 等。
-#
-# 为什么整包继承是安全的：旧的 AOSP 产品就是这么拿的，且同样设了
-# TARGET_NO_RECOVERY := true —— base_vendor.mk 里那些 *.recovery 模块
-# 在本设备上已经验证过不会造成问题。
-#
-# ⚠️ 刻意只继承 base_vendor.mk，【不】继承 full_base.mk ——
-#    后者会把 AOSP 那套应用（Launcher3/Settings/…）叠上来，与 crDroid 自带的撞包。
-$(call inherit-product, $(SRC_TARGET_DIR)/product/base_vendor.mk)
+# vendor 分区的基础件（vendor_compatibility_matrix.xml、shell_and_utilities_vendor
+# 即 /vendor/bin/sh + toybox_vendor 等）随 full_base.mk → … → base_vendor.mk 一起来，
+# 接线在 lineage_gaokun3.mk，那里有完整的踩坑记录。
 
 # ----------------------------------------------------------------- fstab
 # 同一份 fstab 要同时进 ramdisk（first stage mount 用）和 vendor
