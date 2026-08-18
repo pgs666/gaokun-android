@@ -20,7 +20,15 @@
 >   - manifest 1180 个项目，本机只缺 `device/linaro/dragonboard`
 >     → `manifests/local_manifest_gaokun3.xml`。
 >   - ★**铃声缺口 crDroid 自带解决**（`vendor/lineage/audio/audio.mk` 装 44 个音频到
->     `product/media/audio/`）；★**解码器缺口它不管** → `media_codecs.xml` 仍要我们装。
+>     `product/media/audio/`）。
+>   - ★**解码器缺口的根因换了**：不是"`media_codecs.xml` 缺失"（#36 那句已更正）。
+>     逐环实测：XML 两份都在、36 个软解码库在、C2 服务已注册、VINTF 片段
+>     `vintf fm` 运行时列得出、AIDL 分支被选中 —— 断点是
+>     `AServiceManager_forEachDeclaredInstance()` 返回空，即
+>     **servicemanager 的 declared 集里没有它**（registered ≠ declared）。
+>     主嫌疑：servicemanager 的 VintfObject 快照早于 apexd 就绪，而该声明带
+>     `updatable-via-apex`。证据链见 `docs/stage6-crdroid.md`。
+>     **不能承诺 crDroid 自动修好**；crDroid 一起来先量 `dumpsys media.player`。
 >   - ★**mesa 管线一个都不能丢**：lineage-23.2 的 `external/mesa3d` 就是 AOSP 那份，
 >     `BOARD_MESA3D_*` 是平行项目自带 mesa 仓库的机制，不是 Lineage 的
 >     （作废 `docs/stage5-freedreno.md:212` 的猜测）。**但好消息（已实测）**：

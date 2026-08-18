@@ -340,6 +340,17 @@ AHAL_StreamPrimary: getCardAndDeviceId: parsed with card id 0, device id 1
 
 ## #36 框架层媒体音的真正拦路虎：`MediaCodecList` 是空的（AOSP 产品配置缺失）
 
+> ⚠️ **2026-08-19 更正**：本节把根因归给"`media_codecs.xml` 缺失 / 产品配置缺口"
+> —— **这个结论是错的**。当天在同一台设备上把整条链路逐环量了一遍：
+> XML（APEX 和 /vendor/etc 两份都在）、36 个软解码库、C2 服务已注册、
+> VINTF 片段装着且 `vintf fm` 运行时确实列得出来、`ro.vendor.api_level=202504`
+> 走 AIDL —— **每一环都是好的**。
+> 真正断点是 `AServiceManager_forEachDeclaredInstance()` 返回空，
+> 即 **servicemanager 的 "declared" 集里没有它**（registered ≠ declared）。
+> 完整证据链与主嫌疑（servicemanager 的 VintfObject 快照早于 apexd 就绪，
+> 而该声明带 `updatable-via-apex`）见 **`docs/stage6-crdroid.md`**。
+> 本节下面的"排查过程"仍然有效，只是结论那一步要改读 stage6。
+
 音频**输出**通路已经完备，有硬证据：
 
 - HAL 指向正确的 ALSA 设备：`AHAL_StreamPrimary: getCardAndDeviceId: parsed with card id 0, device id 1`

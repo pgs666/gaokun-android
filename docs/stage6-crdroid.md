@@ -122,6 +122,74 @@ wlan0                 192.168.31.227/24             （自动连网）
 dumpsys media.player  "Decoder infos by media types:" 之后【空无一物】  ← 换轨要修的就是这个
 ```
 
+## ★ #36 的机制查清了：不是 XML 缺失，是 servicemanager 的 declared 集里没有 c2
+
+2026-08-19 在**换轨前的这台设备上**（AOSP 16 那套）把整条链路逐环量了一遍。
+结论推翻了 #36 里"`media_codecs.xml` 缺失"的说法 —— 那份文件在，缺的是别的东西。
+
+### 链路上每一环的实测状态
+
+| 环节 | 实测 | 结论 |
+|---|---|---|
+| swcodec APEX | `isActive="true"`，`apexd.status=ready`，41 个模块在 `apex-info-list.xml` 里 | ✅ |
+| 软解码库 | `/apex/com.android.media.swcodec/lib64/libcodec2_soft_*.so` **36 个** | ✅ |
+| 编解码器 XML | `/apex/…/etc/media_codecs.xml` 24377 字节；`/vendor/etc/media_codecs.xml` 同样大小 | ✅ |
+| 变体属性 | `ro.media.xml_variant.codecs{,_performance}` 均为空 → 用默认文件名 | ✅ |
+| C2 服务注册 | `service check android.hardware.media.c2.IComponentStore/software` → **found** | ✅ |
+| VINTF 片段 | `/system/etc/vintf/manifest/manifest_media_c2_software.xml` 装着 | ✅ |
+| libvintf 运行时视图 | `vintf fm` **确实列出** `android.hardware.media.c2` / `IComponentStore/software`（带 `updatable-via-apex`） | ✅ |
+| AIDL/HIDL 选择 | `ro.vendor.api_level=202504` ≥ 202404 → 走 AIDL（`hal/common/HalSelection.cpp:31`） | ✅ |
+| **客户端枚举** | `Codec2Client: No Codec2 services declared in the manifest.` | ❌ |
+| MediaCodecList | `dumpsys media.player` 的 `countCodecs()` = 0 | ❌ |
+
+### 精确定位
+
+`frameworks/av/media/codec2/hal/client/client.cpp:2636` 起：
+
+```cpp
+if (c2_aidl::utils::IsSelected()) {                    // ← 实测为 true
+    AServiceManager_forEachDeclaredInstance(AidlBase::descriptor, &names, …);
+}
+…
+if (names.empty()) LOG(INFO) << "No Codec2 services declared in the manifest.";
+```
+
+★ **关键区别：registered ≠ declared。**
+`service list` 看到的是服务自己 `addService` 注册的；
+`forEachDeclaredInstance` 查的是 servicemanager 从 **VINTF** 建的"声明"集
+（`frameworks/native/cmds/servicemanager/ServiceManager.cpp:759 getDeclaredInstances`
+→ `getVintfInstances()`）。两者可以一个有一个没有 —— 本机正是如此。
+
+排除的分支（都读过源码）：
+- `ServiceManager.cpp:765` 那个静默清空分支不成立 ——
+  `isRomService()` 只匹配 `lineage*` / `vendor.lineage.*` / `profile`（crDroid 自加），
+  且 `isUntrustedCaller()` 要求 uid ≥ AID_APP_START 且 sid 含 `untrusted_app`，
+  而 mediaserver 是 `u:r:mediaserver:s0`。
+- SELinux 拒绝也不成立：真被拒会返回 `EX_SECURITY`，而且本机是 Permissive。
+
+### 剩下的主嫌疑（下一步怎么证）
+
+**servicemanager 的 `VintfObject` 快照是开机早期建的，而那条声明带
+`updatable-via-apex="com.android.media.swcodec"`。** `vintf fm` 是刚起的新进程、
+APEX 已 active，所以看得见；servicemanager 活了一整个开机周期，很可能缓存了
+apexd 就绪【之前】的视图。这能同时解释"libvintf 看得见、servicemanager 看不见"。
+
+下一次开机时一条命令就能证/证伪：
+```
+logcat -b all | grep -i "VINTF manifest"
+```
+（`isVintfDeclared()` 会打 `Found … in framework VINTF manifest` 或
+ `Could not find … in the VINTF manifest`。）
+
+### 对换轨的意义
+
+⚠️ **不能承诺"crDroid 自动修好"** —— 链条上每个文件都在、都正确，
+这不是那种"少装一个 xml"的产品配置缺口。但 crDroid 是被几十万台设备验证过的
+完整 ROM，启动顺序/apexd/servicemanager 的时序都是标准的，
+**crDroid 起来后第一件事就是量 `dumpsys media.player`**，一条命令即可判定。
+
+（铃声那半边仍然大概率自动好：`vendor/lineage/audio/audio.mk` 明确装 44 个音频。）
+
 ## 待核实（进了同步好的树再 grep，不许凭记忆下结论）
 
 - `PRODUCT_VERSION_MAJOR/MINOR`、`LINEAGE_BUILD` 由谁赋值（`config/version.mk` 还是 envsetup）
