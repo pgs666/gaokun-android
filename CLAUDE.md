@@ -7,12 +7,28 @@
 
 **当前阶段：Stage 5（GPU 攻坚中，音频/蓝牙未完）**（每次开工时更新这一行）
 
-> **Stage 5 GPU 战况（2026-08-18）：turnip 能跑但 GMU 必死，已穷尽本地变量。**
-> turnip 25.3 与 26.0.3 在 Android 下均于首批提交后死于 GMU HFI 带宽投票超时
-> （`HFI_H2F_MSG_GX_BW_PERF_VOTE` → 看门狗 → `cx gdsc didn't collapse` 循环）。
-> **同一内核/DTB/固件在 Ubuntu 用户态下 turnip 完好**（vulkaninfo/渲染压测/
-> 2000 次变频投票风暴全过）——差异锁定在 Android WSI 缓冲导入路径，
-> 完整诊断档案见 `docs/stage5-freedreno.md`（可直接投给 mesa 上游）。
+> **Stage 5 GPU 战况（2026-08-18 傍晚）：GMU 之谜已破案，内核层修好，
+> 只剩一个 mesa 用户态 bug。** 详细案卷见 `docs/stage5-freedreno.md` D4–D8，
+> 工具集 `scripts/gmu-forensics/`（含 7 条会反复中招的踩坑，先读 README）。
+> - **根因不是电源管理**：`GX_BW_PERF_VOTE 超时` 是果不是因。真相是
+>   GPU SMMU 撞 translation fault → 按 `SCTLR.CFCFG=1` 进入 **stall**，
+>   而 **context-fault 中断从不到达 CPU**（`/proc/interrupts` 计数恒 0，
+>   尽管 CFIE=1）→ 无人 resume → AHB 总线 stall → CP 断粮 → GMU 投票超时
+>   → 看门狗 → stall 又拖住掉电（`cx gdsc didn't collapse`）→ 死循环。
+> - **已修（workaround 常驻）**：`scripts/gmu-forensics/smmu-nostall.sh`
+>   轮询清 `SCTLR.CFCFG` 让 fault 走 terminate → **GMU 零错误持续 190s+**，
+>   SF 恢复 60Hz vsync，GPU 能正常掉电。
+> - **剩余唯一障碍（下一场首选，只需重编 vulkan.freedreno.so ~15 分钟）**：
+>   turnip 在 ANGLE 的 dynamic-rendering 收尾处 NULL deref
+>   （`tu_cmd_render+324` 读 `NULL+0xd0`）。旁路 `debug.hwui.renderer=skiavk`
+>   能让该崩溃归零、启动推进到 launcher3，但撞 AOSP HWUI 断言
+>   （HWUI 要 2 个 Vulkan 队列，turnip 只报 1 个）。修好 mesa 即通。
+> - ⚠️ **旧结论作废**：`debug.tu.debug` 属性名是错的（正确
+>   `debug.mesa.tu.debug`），故 2026-08-18 前所有 tu_debug 实验旗标从未生效；
+>   `msm.enable_preemption=0` 是有害参数（内核判断语义反转）已从 cmdline 删。
+> - **运维资产**：cmdline 加 `androidboot.flash.locked=0
+>   androidboot.verifiedbootstate=orange` 后 `adb remount` 走 overlayfs
+>   → 改 vendor 不用开构建机（每次重启挂回 ro，写前重跑 remount）。
 > mesa 26 的 AOSP 构建管线已全套打通并入库：`scripts/mesa-tool-fixes.py`
 > + `scripts/mesa-bp-merge.py` + `scripts/join_meson_continuations.py`
 > + `patches/0003..0006` + `device/huawei/gaokun3/mesa/`。
