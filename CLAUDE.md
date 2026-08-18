@@ -29,9 +29,12 @@
 >   修复见 `scripts/gmu-forensics/apply-0004v2.py`（改用 `vk.anb_memory`
 >   真正绑定 + 惰性分配处加 NULL 防御），编译只需 `m vulkan.freedreno`（1.5 分钟），
 >   部署 `scripts/gmu-forensics/deploy-turnip.sh`（走 overlayfs，**不刷 super**）。
-> - **残余（下一场，一轮编译即可定性）**：还有少量 SMMU fault
->   （`smmustall` 打出 `FAR=0x100`）→ 仍有 image 走了 v2 的"安全跳过"分支；
->   症状是 `screencap` 会卡、启动期少量 GMU 错误（进桌面后基本不再新增）。
+> - ⚠️ **但尚未稳定**：浸泡到第 7 分钟，SF/system_server/launcher3 全部消失
+>   （`input` 服务也丢），`screencap` 从头就卡死 —— 残余 SMMU fault
+>   （`smmustall` 打出 `FAR=0x100`，仍有 image 走了 v2 的"安全跳过"分支）
+>   会慢慢拖垮框架。**设备已回退 `pastel` 保日常可用。**
+>   这个残余 fault 就是"能启动"与"稳定可用"之间的唯一距离，
+>   下一场一轮编译即可定性。
 >   办法：在那个 else 分支加 `mesa_logw` 打印 image 的
 >   `create_flags`/`usage`/`format`/是否 ANB。
 >   一键回退软渲染：`adb remount` 后把 build.prop 的
