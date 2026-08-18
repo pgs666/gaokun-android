@@ -1,0 +1,9 @@
+service smmustall /vendor/bin/smmu-nostall.sh
+    user root
+    group root
+    seclabel u:r:shell:s0
+    oneshot
+    disabled
+
+on post-fs-data
+    start smmustall

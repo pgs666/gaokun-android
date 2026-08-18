@@ -343,3 +343,89 @@ IRQ 路由可能也没接好（fault 静默 stall，驱动拿不到地址）—�
 3. 自建 turnip（Ubuntu gcc，btools 已通、bturnip 构建待修）本用于
    "我们的构建 vs apt 构建"对比，现降级——SMMU fault 指向导入逻辑而非
    工具链，除非确需再排构建差。
+
+## D6. 根因确认：GPU SMMU 的 context-fault 中断从不到达 CPU（stall 死锁）
+
+D5 定位到 SMMU translation fault 后，继续追问"为什么内核从不处理这次
+fault"。**内核 5 份死亡日志里一条 fault 打印都没有**
+（`*** gpu fault` / `*** fault: iova=` / `Unhandled context fault` 全 0 命中，
+msm_iommu.c:647 与 adreno 侧打印均缺席）。
+
+### 铁证一：中断使能着，但计数恒为 0
+
+```
+/proc/interrupts（Android，fault 已发生、recover 循环中）：
+ 41:  0 ... GICv3  710 Level  arm-smmu-context-fault   ← GPU SMMU CB0（SPI 678）
+ 42:  0 ... GICv3  711 Level  arm-smmu-context-fault
+ 39/40: 0 ...      704/705    arm-smmu global fault
+```
+15 秒观察窗内（期间 hangcheck 每 500ms 重试提交并反复 fault）**零增长**。
+对照：`gpu-irq`（hwirq 332）计数 233，说明 GPU 自身中断链路是通的。
+
+### 铁证二：devmem 直读 SMMU 硬件（CB0 @ 0x3db0000）
+
+`CONFIG_DEVMEM=y` 且 `IO_STRICT_DEVMEM` 未开 → toybox `devmem` 可直读 MMIO。
+CB 基址推导：`ID1=0x30000007` → NUMPAGENDXB=3 → numpage=16，4KB 页
+→ `CB0 = 0x3da0000 + 16*0x1000 = 0x3db0000`（`ID0=0x4c017e09` 的 NUMSMRG=9
+与 dmesg "9 register groups"、NUMCB=7 与 "7 context banks" 对齐）。
+
+```
+死亡现场（GPU 仍上电、cx gdsc 塌不下去时）：
+  SCTLR = 0x1E7  → M=1 TRE=1 AFE=1 CFRE=1 CFIE=1 CFCFG=1 S1_ASIDPNE=1
+                    ↑ 中断使能(CFIE) 与 stall-on-fault(CFCFG) 都正确开着
+  FSR   = 0x40000400 → SS=1（bit30，SMMU 正卡在 stalled state）
+                       但 TF/PF/EF/AFF/TLBMCF 全 0，FAR=0（fault 记录已被清）
+```
+
+### 铁证三：手工解锁 → GPU 当场复活
+
+```
+devmem CB0+0x00 4 0x167   # 清 SCTLR.CFCFG(bit7)：fault 改走 terminate
+devmem CB0+0x08 4 1       # CB_RESUME=TERMINATE：放掉卡住的事务
+→ SCTLR 0x1E7→0x167，FSR 0x40000400→0x80000602（SS 清除，MULTI|TF 浮现）
+→ GMU 错误停止累积，dumpsys SurfaceFlinger --latency 返回 16666682（60Hz vsync）
+→ 随后 CB0 全寄存器读 0 = **GPU 成功掉电了**（此前正是 stall 拖住掉电，
+   才有那句 cx gdsc didn't collapse）
+```
+重启 + 开机自动解锁服务后：**GMU 错误 0，持续 95s+ 零错误**
+（此前每次必进死循环）。
+
+### 完整死亡链（终版）
+
+1. GPU 渲染中访问了未正确映射的 IOVA → SMMU translation fault
+2. SMMU 按 CFCFG=1 进入 **stall**，等 CPU 处理
+3. **context-fault 中断从不到达 CPU** → 没人读 FSR、没人写 CB_RESUME
+4. SMMU 永久 stall → AHB 总线 stall（`CP_AHB_BUSY_CX_MASTER`）→ CP 取不到指令
+5. GMU 想投票也碰不了总线 → `GX_BW_PERF_VOTE` 1s 超时 → 看门狗
+6. recover 想让 GPU 掉电，但 stall 拖住 → `cx gdsc didn't collapse` → 死循环
+
+**为什么 Ubuntu 不死**：从不产生这个 fault（turnip 自分配 buffer，映射自控），
+所以这条 stall 死锁链永远不被触发——不是 Ubuntu 更健壮。
+
+### 方法学（会反复踩）
+
+- **GPU SMMU 的 CB 寄存器只在 GPU 上电时有效，掉电后一律读 0**。
+  `TTBR0=0/FAR=0` 若与 SCTLR=0 同时出现，是掉电，不是真值。
+- toybox `devmem` 输出**十进制**（`00000487` = 0x1E7），别当 hex 读。
+- ⚠️ **X4 实验（DTB 破坏 `qcom,adreno-smmu` compatible）已取消**：
+  `msm_iommu.c:788` 无条件解引用 `adreno_smmu->cookie`，
+  compatible 一改 drvdata 就是 NULL → 开机即 NULL deref panic。
+
+### 疑点：DTS 的 SMMU 中断号跳号
+
+`sc8280xp.dtsi` 的 `gpu_smmu`：global = SPI 672/673，context = SPI **678**–689
+—— **674-677 被跳过**。若实际硬件 context fault 起于 674，则 CB0 的中断被整体
+错配（DTS 逆向而来，无手册对照），完全符合"使能了但永不到达"。**待验证**。
+
+### 修复层次
+
+1. **可用性 workaround（已验证）**：`scripts/gmu-forensics/smmu-nostall.sh`
+   + `smmustall.rc` —— 轮询清 `SCTLR.CFCFG`（内核 recover 会重写，故须持续），
+   顺带趁上电抓 `FSR/FAR/FSYNR/TTBR0` 并 `log -t smmustall` 打出 fault 地址。
+2. **内核补丁**：本平台不能用 stall-on-fault（msm_iommu.c 的
+   `set_stall(true)` 是为抓 devcoredump 的调试特性，在中断不通的平台上
+   直接致命）→ 条件禁用。**可提上游**。
+3. **根治**：修 DTS 中断号（需先验证 674 假设）。
+4. **fault 本身**：terminate 后系统能继续渲染，暗示 fault 影响局部
+   （疑 CP 预取越界 / ANB 导入映射尺寸不符）——下一场从 workaround 打出的
+   FAR 地址与 devcd `bos:` 表交叉核对开始。
