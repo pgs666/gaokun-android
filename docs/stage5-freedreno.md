@@ -291,3 +291,55 @@ GEMNoC workaround 缺失作为**触发器**（作为放大器仍候选）
 - gpupin 服务（`gpu-pin.sh`+`gpupin.rc`，seclabel u:r:shell:s0 过 init
   校验）：等 devfreq 节点出现即写 min_freq，目标值读
   /data/local/tmp/gpu_min_freq。
+
+## D5. 真凶浮出：GPU SMMU translation fault（crashdec 铁证，推翻电源假说）
+
+用自建 crashdec（`mesa-26.0.3/btools`，7.2 devcd 需把 `revision:` 行改成
+`690 (6.9.0.0)` 骗过 parser）解全部 5 份死亡 devcoredump，**寄存器组给出
+决定性证据**：
+
+```
+RBBM_STATUS:  { ... CP_BUSY | CP_AHB_BUSY_CX_MASTER }
+RBBM_STATUS3: { SMMU_STALLED_ON_FAULT | 0xf060000f }   ← 5/5 全部命中
+CP_IB1_REM_SIZE: 0    CP_IB2_REM_SIZE: 0                ← IB 都执行完了
+CP_RB_RPTR: 0x2c9 < CP_RB_WPTR: 0x3e3                   ← ring 还有活没干
+CP_HW_FAULT: 0
+```
+
+**判决**：GPU 的 SMMU（per-process pagetable）**卡在一次 translation
+fault 上**（stall-on-fault 模式）→ AHB 总线 stall（`CP_AHB_BUSY_CX_MASTER`）
+→ CP 取不到下一条指令 → GMU 想投票也碰不了总线 → `GX_BW_PERF_VOTE`
+1 秒超时 → 看门狗。**`GX_BW_PERF_VOTE timed out` 是果，不是因；
+GMU 电源假说（D3）被推翻**——旧判断"rbbm-status=0 + ring 积压 = 电源层死"
+读的是内核早期快照，crashdec 从完整寄存器组读到的是 SMMU stall。
+
+**这解释了全部矛盾**：
+- 为什么 Ubuntu vkmark 无敌：kms winsys 渲染到 turnip **自分配**的 buffer，
+  映射完全自控，无外来 IOVA；
+- 为什么 Android 必死：SF/app 渲染到 gralloc(minigbm) 分配、经 dma-buf
+  **导入 turnip** 的 ANativeWindowBuffer——**导入路径建立的 GPU 映射有误**
+  （地址/大小/pagetable 归属），GPU 一访问就 fault；
+- 为什么电源/变频/抢占/WiFi/时序全部实验无效：根本不在那条线上；
+- 为什么单进程(X3)也死、且死更早：单 context 也走 ANB 导入，首帧就 fault。
+
+→ **真凶重新锁定 WSI/ANB buffer 导入路径**（D 节开头的原始头号嫌疑，
+一度被 D3 电源假说挤下，现由 SMMU_STALLED_ON_FAULT 铁证复位）。
+patch 0004（ANB NULL-memory 重绑定）修的是**用户态崩溃**，与此正交——
+真正要查的是 `vk_android_import_anb`（create 时 dma-buf 导入 + BindImageMemory2
+建映射，见 src/vulkan/runtime/vk_android.c）在 a690 上产生的 GPU 映射
+是否与 minigbm 的实际 buffer 布局/大小一致。
+
+**旁证疑点**：内核 klog **没有** adreno SMMU fault handler 的地址打印
+（正常应有 TTBR0/FAR/FSR 的 dev_err）→ a690 的 GPU SMMU context-fault
+IRQ 路由可能也没接好（fault 静默 stall，驱动拿不到地址）——这本身是
+第二个待查的 a690 特有缺陷。
+
+### 下一步（已排好，全部低成本）
+1. **抓 fault 地址**：开 arm-smmu/adreno dynamic debug + 确认 GPU SMMU
+   context-fault IRQ；或 X4（DTB 单字节禁 `qcom,adreno-smmu` → 退全局
+   地址空间，`scripts/gmu-forensics/dtb-smmu-patch.py`）看 fault 是否消失。
+2. **审 ANB 导入映射**：对比 turnip 导入 buffer 的 iova/size 与 minigbm
+   分配的实际布局；devcd 的 `bos:` 段有全部 BO 的 iova+size 可交叉核对。
+3. 自建 turnip（Ubuntu gcc，btools 已通、bturnip 构建待修）本用于
+   "我们的构建 vs apt 构建"对比，现降级——SMMU fault 指向导入逻辑而非
+   工具链，除非确需再排构建差。
