@@ -46,15 +46,24 @@ manifest 里**没有** `device/mainline/generic` / `kernel/mainline` / `prebuilt
 > （"LineageOS 系可能直接有 `BOARD_MESA3D_*` 支持"）。
 > `scripts/mesa-*.py` + `patches/0003..0006` + `mesa/turnip-shared.bp.in` 全部仍然必需。
 
-**但有个好消息**（归档时顺手读出来的）：我们 AOSP 树里那份打过补丁的 `external/mesa3d`
+**但有个好消息，而且已经实测确认（不是推断）**：crDroid 同步下来的
+`external/mesa3d` 与我们打过补丁的那棵是**同一个 commit**：
 
 ```
-VERSION       = 26.0.3
-git describe  = android-16.0.0_r4
+                    crDroid 16.0                 我们归档的（Stage 5）
+git describe        android-16.0.0_r4            android-16.0.0_r4
+HEAD                d4b6f1eba289310b16ee77…      d4b6f1eba28…（同）
+VERSION             25.3.0-devel                 26.0.3   ← 差异见下
+tu_image.cc:918     /* TODO handle VkNativeBufferANDROID */   ← 那句还在
 ```
 
-与 crDroid 的 AOSP remote revision **是同一个 tag**。所以 mesa 快照逐字相同，
-Stage 5 的生成/合并管线可以原样套用，最差情况直接把归档的整棵树铺回去。
+⚠️ **`VERSION` 的差异不是版本不同**：同一 git HEAD，说明我们那棵的 VERSION
+文件是本地未提交的改动（管线自己改的）。**上游快照的真实版本是 mesa
+`25.3.0-devel`**；CLAUDE.md / stage5 文档里出现过的"mesa 26"是被这个改过的
+文件误导的说法，以本节为准。
+
+结论：Stage 5 的生成/合并管线可以逐字套用，最差情况直接把
+`~/keep/mesa3d-patched.tar.zst` 整棵铺回去。M3 的风险比预期低得多。
 
 ## M0 执行记录
 
@@ -97,6 +106,21 @@ repo sync -c --no-clone-bundle --force-sync -j16
 - **刻意不加 `--no-tags`**：AOSP 项目的 revision 本身就是个 tag
   （`refs/tags/android-16.0.0_r4`），省这点空间不值得赌一个隐晦的失败模式。
   451G 可用，不需要抠。
+
+### 换轨前的硬件基线（2026-08-19 实机采集，M4 回归时逐项对照）
+
+```
+ro.build.fingerprint  Huawei/aosp_gaokun3/gaokun3:16/BP4A.251205.006/eng.vahiru:userdebug
+                      ↑ 平台自己的 build ID 也是 BP4A，与 crDroid 的 release config 对上
+uname -r              7.2.0-rc2-gaokun3+            （kb21，crDroid 继续用它）
+ro.hardware.vulkan    freedreno                     /vendor/lib64/hw/vulkan.freedreno.so 14,617,032
+/proc/asound/cards    0 [SC8280XPHUAWEIG]: sc8280xp - SC8280XP-HUAWEI-GAOKUN3
+                        HUAWEI-GK_W7X-M1010-GK_W7X_PCB
+bluetooth_manager     state: ON，地址从芯片读出
+wlan0                 192.168.31.227/24             （自动连网）
+桌面进程              surfaceflinger 711 / system_server 874 / systemui 1153 / launcher3 1424
+dumpsys media.player  "Decoder infos by media types:" 之后【空无一物】  ← 换轨要修的就是这个
+```
 
 ## 待核实（进了同步好的树再 grep，不许凭记忆下结论）
 

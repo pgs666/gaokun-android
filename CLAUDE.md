@@ -23,9 +23,13 @@
 >     `product/media/audio/`）；★**解码器缺口它不管** → `media_codecs.xml` 仍要我们装。
 >   - ★**mesa 管线一个都不能丢**：lineage-23.2 的 `external/mesa3d` 就是 AOSP 那份，
 >     `BOARD_MESA3D_*` 是平行项目自带 mesa 仓库的机制，不是 Lineage 的
->     （作废 `docs/stage5-freedreno.md:212` 的猜测）。**但好消息**：我们打过补丁的
->     mesa 是 **26.0.3 @ android-16.0.0_r4**，与 crDroid 同一 tag → 管线逐字可套，
->     最差直接铺回归档树 `~/keep/mesa3d-patched.tar.zst`。
+>     （作废 `docs/stage5-freedreno.md:212` 的猜测）。**但好消息（已实测）**：
+>     crDroid 的 `external/mesa3d` 与我们打过补丁的那棵是**同一个 commit**
+>     （`d4b6f1eba289…` @ `android-16.0.0_r4`，mesa **25.3.0-devel**，
+>     `tu_image.cc:918` 那句 TODO 还在）→ 管线逐字可套，最差直接铺回归档树
+>     `~/keep/mesa3d-patched.tar.zst`。
+>     ⚠️ 顺带修正：文档里出现过的"mesa 26"是被我们本地改过的 `VERSION`
+>     文件误导，上游快照是 25.3.0-devel。
 >   - 构建机磁盘：**整棵删了 `~/aosp`**（157G → 451G 可用）。
 >     "只删 out 腾到 264G"的算术不够 —— crDroid 源码+.repo≈190G + out 100–130G。
 >     删之前已归档 `~/keep/`（super/ramdisk/turnip.so/mesa 全树，`sha256sum -c` 通过）。
