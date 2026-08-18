@@ -17,6 +17,11 @@ out/
 # 预检报告输出（机器特定，采集结果誊进 docs/ 即可）
 scripts/ego-preflight-*.txt
 
+# deploy-turnip.sh 从构建机拉下来的中转产物（14MB ELF，构建机上随时可重建）
+scripts/gmu-forensics/*.so
+# 现场取证产物（探针日志/dmesg/fault 普查，结论誊进 docs/stage5-freedreno.md）
+scripts/gmu-forensics/b1-*/
+
 # 固件 blob 不进版本库：
 #   qca/ + a660_* 来自 linux-firmware >= 20241210（有再分发许可但没必要占仓库）
 #   HUAWEI/gaokun3/*.mbn 是华为专有固件（linux-firmware 里没有），

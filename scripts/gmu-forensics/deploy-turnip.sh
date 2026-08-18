@@ -8,7 +8,8 @@ SO=vulkan.freedreno.so
 cd "$(dirname "$0")" || exit 1
 
 echo "=== 1. 从 VM 取新 so ==="
-scp -i ~/.ssh/ed25519 -o StrictHostKeyChecking=no \
+# -C 压缩：这条链路实测只有几十 KB/s，14.6MB 的 ELF 压完约 4MB，省一半以上时间
+scp -C -i ~/.ssh/ed25519 -o StrictHostKeyChecking=no \
   "vahiru@$VM:~/aosp/out/target/product/gaokun3/vendor/lib64/hw/$SO" . || exit 1
 ls -la "$SO"
 
