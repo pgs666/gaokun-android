@@ -5,7 +5,22 @@
 在华为 MateBook E Go（Snapdragon 8cx Gen 3 / sc8280xp，代号 gaokun）上跑原生 AOSP，
 最终目标是能稳定运行 arm64 手游。
 
-**当前阶段：Stage 4（输入/音频/WiFi/电源）**（每次开工时更新这一行）
+**当前阶段：Stage 5（GPU 攻坚中，音频/蓝牙未完）**（每次开工时更新这一行）
+
+> **Stage 5 GPU 战况（2026-08-18）：turnip 能跑但 GMU 必死，已穷尽本地变量。**
+> turnip 25.3 与 26.0.3 在 Android 下均于首批提交后死于 GMU HFI 带宽投票超时
+> （`HFI_H2F_MSG_GX_BW_PERF_VOTE` → 看门狗 → `cx gdsc didn't collapse` 循环）。
+> **同一内核/DTB/固件在 Ubuntu 用户态下 turnip 完好**（vulkaninfo/渲染压测/
+> 2000 次变频投票风暴全过）——差异锁定在 Android WSI 缓冲导入路径，
+> 完整诊断档案见 `docs/stage5-freedreno.md`（可直接投给 mesa 上游）。
+> mesa 26 的 AOSP 构建管线已全套打通并入库：`scripts/mesa-tool-fixes.py`
+> + `scripts/mesa-bp-merge.py` + `scripts/join_meson_continuations.py`
+> + `patches/0003..0006` + `device/huawei/gaokun3/mesa/`。
+> **当前设备跑软渲染兜底**（`ro.hardware.vulkan=pastel`，turnip 仍装在
+> vendor 里可随时切回）。音频：内核链全 =y、ADSP 三兄弟 running、
+> 固件（含 audioreach-tplg.bin）进 ramdisk+vendor，但声卡未注册
+> （macro/soundwire 的 deferred probe 不收敛，`suppress_bind_attrs`
+> 封死手动补绑定）——下一场从这里开打。
 
 > **Stage 4 触摸已于 2026-08-17 完成：触摸丝滑可用。**
 > 根因是 gpio174（模式选择脚）无人驱动，见 `docs/stage4-findings.md` #26

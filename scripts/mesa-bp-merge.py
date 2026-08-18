@@ -113,6 +113,26 @@ def dedupe_lists(block):
     return block
 
 
+def fix_char_split_flags(block):
+    """生成的 python 里 meson 的 `list += '字符串'` 变成 Python 的
+    list += str → 整串被拆成单字符条目（"-","W","n","o",...）。
+    把连续 3 个以上的单字符条目重组回一个旗标字符串。"""
+    pat = re.compile(r'(?:^\s*".",\n){3,}', re.M)
+
+    def repl(m):
+        ind = re.match(r'\s*', m.group(0)).group(0)
+        chars = re.findall(r'"(.)",', m.group(0))
+        return '%s"%s",\n' % (ind, ''.join(chars))
+
+    return pat.sub(repl, block)
+
+
+def fix_abs_paths(block):
+    """mesa 26 的部分 files() 经 dir_source_root 拼接后被生成器写成绝对路径，
+    Soong 拒绝（Path is outside directory）。统一改回树内相对路径。"""
+    return re.sub(r'"/[^"]*/external/mesa3d/', '"', block)
+
+
 def fix_genrule(block):
     if not block.lstrip().startswith('genrule {'):
         return block
@@ -319,7 +339,7 @@ if ghosts:
     alive = cleaned
 
 blocks = alive
-fixed = [fix_python_module(fix_warning_flags(fix_export_generated_headers(fix_gralloc_aidl_dep(fix_drm_dep(fix_genrule_exports(fix_genrule(b))))))) for b in blocks]
+fixed = [fix_python_module(fix_warning_flags(fix_export_generated_headers(fix_gralloc_aidl_dep(fix_drm_dep(fix_genrule_exports(fix_genrule(fix_char_split_flags(fix_abs_paths(b))))))))) for b in blocks]
 print('后处理: 修正 %d 个块' % sum(1 for a, b in zip(blocks, fixed) if a != b))
 
 # ── 4. 追加手写的共享库包装（turnip 静态库 → vulkan.freedreno.so）────────

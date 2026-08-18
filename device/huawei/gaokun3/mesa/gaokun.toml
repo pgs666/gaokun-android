@@ -41,6 +41,9 @@ links = []
 zlib = [
     { target_name = 'libz', target_type = 2 }
 ]
+'android-hwvulkan-headers' = [
+    { target_name = 'hwvulkan_headers', target_type = 3 }
+]
 hardware = [
     { target_name = 'libhardware', target_type = 1 },
     { target_name = 'hwvulkan_headers', target_type = 3 }
@@ -54,8 +57,17 @@ log = [
 nativewindow = [
     { target_name = 'libnativewindow', target_type = 1 }
 ]
+ui = [
+    { target_name = 'libui', target_type = 1 }
+]
 sync = [
     { target_name = 'libsync', target_type = 2 }
+]
+'android.hardware.graphics.mapper' = [
+    { target_name = 'libgralloctypes', target_type = 2 },
+    { target_name = 'android.hardware.graphics.mapper@4.0', target_type = 2 },
+    { target_name = 'libhidlbase', target_type = 1 },
+    { target_name = 'libutils', target_type = 1 }
 ]
 
 [[project_config]] # Turnip + gfxstream
@@ -89,7 +101,7 @@ headers = []
 symbols = []
 
 [project_config.function_not_supported]
-functions = []
+functions = ['__builtin_add_overflow_p', '__builtin_sub_overflow_p']
 
 [project_config.link_not_supported]
 links = []
