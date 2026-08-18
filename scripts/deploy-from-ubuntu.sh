@@ -2,17 +2,30 @@
 # 在 Ego 的 Ubuntu 上跑：从构建机拉产物 → 刷 super → 换内核/DTB/ramdisk → 回 Android
 #
 # 用法（在 Ego 的 Ubuntu 里）：
-#   bash deploy-from-ubuntu.sh [all|super|boot]
-#     all   （默认）super + 内核 + DTB + ramdisk 全刷
-#     super 只刷 super.img
-#     boot  只换内核/DTB/ramdisk（不动 super）
+#   bash deploy-from-ubuntu.sh [all|super|boot|rollback]
+#     all      （默认）super + 内核 + DTB + ramdisk 全刷
+#     super    只刷 super.img
+#     boot     只换内核/DTB/ramdisk（不动 super）
+#     rollback 刷回 Stage 5 那套能用的 AOSP 16（构建机 ~/keep/aosp16-images/）
+#              —— turnip + 声音 + 蓝牙都在里面，十来分钟回到换轨前状态
+#
+# 源码树用环境变量切：SRC_TREE=~/aosp 可回到旧的 AOSP 树。
+#   SRC_TREE=~/aosp bash deploy-from-ubuntu.sh super
 #
 # 前提：Ego 已有直连构建机的 ssh 钥匙（vahiru@<BUILD_VM>），
 #       ESP 挂在 /boot/efi，Android 目录是 <machine-id>/android/。
 set -euo pipefail
 
 VM=vahiru@<BUILD_VM>
-OUT=~/aosp/out/target/product/gaokun3
+# Stage 6 起默认从 crDroid 树取产物（旧 AOSP 树已删，归档在构建机 ~/keep/）
+#
+# ⚠️ 这两个路径里的 ~ 必须保持【字面量】，不能让本地 shell 展开：
+#    它们是【构建机】上的路径（/home/vahiru），而脚本跑在 Ego（/home/user）。
+#    展开了就会去 scp vahiru@vm:/home/user/... —— 必然找不到。
+#    pull() 把路径整个交给 scp，由远端 shell 展开 ~。
+SRC_TREE=${SRC_TREE:-'~/crdroid'}
+OUT=$SRC_TREE/out/target/product/gaokun3
+KEEP='~/keep/aosp16-images'
 MID=8a29534fa802480d9fbb71aa18c01d7b
 ESP=/boot/efi/$MID/android
 SUPER_PART=/dev/nvme0n1p8
@@ -48,11 +61,27 @@ flash_boot() {
   echo "内核 / DTB / ramdisk 已更新（ramdisk $(stat -c%s /tmp/ramdisk.img) 字节）"
 }
 
+flash_rollback() {
+  # 回到换轨前那套 AOSP 16（归档于构建机，sha256 校验过）。
+  # 内核/DTB 不用换：crDroid 与 AOSP 用的是同一个 kb21 内核。
+  echo "════ 回退到 Stage 5 的 AOSP 16 ════"
+  pull "$KEEP/super.img"   /tmp/super-rollback.img
+  pull "$KEEP/ramdisk.img" /tmp/ramdisk-rollback.img
+  sudo -n simg2img /tmp/super-rollback.img "$SUPER_PART"
+  sudo -n cp /tmp/ramdisk-rollback.img "$ESP/ramdisk.img"
+  [ -f "$ESP/ramdisk-debug.img" ] && sudo -n cp /tmp/ramdisk-rollback.img "$ESP/ramdisk-debug.img"
+  sync
+  echo "已回退。注意 /data 里是 crDroid 写的数据，AOSP 起不来就清 userdata："
+  echo "  sudo mkfs.ext4 -F /dev/disk/by-partlabel/userdata"
+  echo "  然后重启进 Android 后跑 scripts/android-post-flash.sh"
+}
+
 case "$MODE" in
   all)   flash_boot; flash_super ;;
+  rollback) flash_rollback ;;
   super) flash_super ;;
   boot)  flash_boot ;;
-  *) echo "未知模式: $MODE"; exit 2 ;;
+  *) echo "未知模式: $MODE（all|super|boot|rollback）"; exit 2 ;;
 esac
 
 # 回到 Android（默认启动项设为 Android，这样以后不用来回折腾）
