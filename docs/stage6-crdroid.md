@@ -8,11 +8,14 @@
 而根因不在硬件也不在内核 —— 是手搓最小 AOSP **缺产品级配置**：
 
 - `MediaCodecList` 是空的（`dumpsys media.player` 的 codec 列表一条不出，
-  App 播放栈底是 `NuPlayerDecoder: Failed to create audio/mpeg decoder`），
-  `/vendor/etc/media_codecs.xml` 原本不存在、拷进去仍空、`ro.media.xml_variant.*` 全未设
+  App 播放栈底是 `NuPlayerDecoder: Failed to create audio/mpeg decoder`）
 - `/system/media/audio/` 整个缺失 —— 铃声、通知音、UI 音效一个没有
 
-详见 `docs/stage4-findings.md` #36。这些是真 ROM 设备树的标准组成部分。
+> ⚠️ 换轨决定做出时，第一条的归因是"`media_codecs.xml` 缺失、产品配置缺口"
+> （`docs/stage4-findings.md` #36）。**当天晚些时候查清后这个归因被推翻了** ——
+> 见下面"#36 的机制查清了"一节。铃声那条仍然成立，且 crDroid 自带解决。
+> 换轨这个决定本身不受影响（真 ROM 的产品配置仍然是我们要的），
+> 但**不能再指望解码器缺口自动消失**。
 
 ## 已核实的上游事实（2026-08-19 逐条从 raw 文件/实际 checkout 读出）
 
@@ -77,7 +80,7 @@ tu_image.cc:918     /* TODO handle VkNativeBufferANDROID */   ← 那句还在
 | `aosp16-images/ramdisk.img` | 12.0 MB | 同上 |
 | `aosp16-images/super_empty.img` | 4.6 KB | LP metadata |
 | `aosp16-images/vulkan.freedreno.so` | 14.6 MB | 已修好 ANB 延迟绑定的硬件 turnip |
-| `mesa3d-patched.tar.zst` | 82 MB | 打过补丁 + 生成好 `Android.bp` 的 mesa 26.0.3 全树（含 .git） |
+| `mesa3d-patched.tar.zst` | 82 MB | 打过补丁 + 生成好 `Android.bp` 的 mesa 全树（含 .git），commit `d4b6f1eba28` |
 
 ### 腾地
 
