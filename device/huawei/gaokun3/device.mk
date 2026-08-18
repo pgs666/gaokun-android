@@ -58,7 +58,6 @@ PRODUCT_PACKAGES += \
 PRODUCT_PACKAGES += \
     android.hardware.health-service.example \
     android.hardware.power-service.example \
-    android.hardware.thermal-service.example \
     android.hardware.memtrack-service.example \
     android.hardware.lights-service.example \
     android.hardware.vibrator-service.example
@@ -72,6 +71,15 @@ PRODUCT_PACKAGES += \
 # com.android.hardware.audio"），直接列包名会被静默丢弃——用 APEX：
 PRODUCT_PACKAGES += \
     com.android.hardware.audio
+
+# thermal HAL 同样是 installable:false 的 APEX 打包件：
+#   hardware/interfaces/thermal/aidl/default/Android.bp 的 cc_binary
+#   android.hardware.thermal-service.example 带 installable: false，
+#   binary 只出现在 apex "com.android.hardware.thermal" 里。
+# 2026-08-19 实测：直接列 binary 名会让 kati 报
+#   "includes non-existent modules in PRODUCT_PACKAGES" 并中止构建。
+PRODUCT_PACKAGES += \
+    com.android.hardware.thermal
 
 # effects HAL 启动即退（"config file audio_effects_config.xml not found"，
 # 实测）。默认配置的 prebuilt_etc 被 soong config 门控着
@@ -267,12 +275,15 @@ PRODUCT_COPY_FILES += \
 # GLES 仍由 ANGLE 提供，但它的 Vulkan 后端从此跑在 Adreno 690 上而不是 SwiftShader。
 # ⚠️ GPU 需要 zap shader 固件 qcdxkmsuc8280.mbn（见上面的固件双路安装），
 #    缺了它 GPU 停在安全模式，adreno probe 会失败。
-PRODUCT_PACKAGES += \
-    vulkan.freedreno
+# ⚠️ Stage 6 M1 暂时注释掉：crDroid 树里还没跑 mesa 生成管线，
+#    vulkan.freedreno 模块尚不存在，列进来会直接中止构建。
+#    M3 跑完 scripts/mesa-*.py + patches/0003..0006 后连同下面的属性一起打开。
+#PRODUCT_PACKAGES += \
+#    vulkan.freedreno
 
-# 排障开关：想回软渲染就把这行改成 pastel（vulkan.pastel 包仍然装着）
+# Stage 6 M1：先用 pastel（swangle 软渲染）把 ROM 起起来，M3 再切回 freedreno。
 PRODUCT_VENDOR_PROPERTIES += \
-    ro.hardware.vulkan=freedreno
+    ro.hardware.vulkan=pastel
 
 # turnip 调试旗标加载器（快速迭代机制，见 docs/stage5-freedreno.md）
 PRODUCT_COPY_FILES += \
