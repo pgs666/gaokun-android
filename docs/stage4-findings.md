@@ -261,6 +261,21 @@ AHAL_StreamPrimary: getCardAndDeviceId: parsed with card id 0, device id 1
 `/proc/asound/card0/pcm1p/sub0/status` 播放中为 `state: RUNNING`。
 2026-08-19 用 ffmpeg 转码的整曲（48kHz 立体声 2'34"）完整放完。
 
+### 起停爆音：BOOST 升压器（A/B 盲听定案）
+
+用户反馈"开头结尾有破音"。三轮 A/B 实听把它逐步收窄：
+
+1. 先怀疑我的测试音硬起停 → 加淡入淡出，**照样爆** → 不是文件问题。
+2. 再怀疑我把 PA 推到 17 削波 → 降到 12/8，**照样爆** → 不只是增益。
+3. 关掉 `SpkrLeft/Right BOOST Switch` → **爆音消失**（用户原话
+   "第一遍没有爆音，很好"）。
+
+→ 结论：爆音来自功放升压器使能瞬间。`bin/audio-route.sh` 默认改成
+**BOOST 关 + PA=12（UCM 原厂值）**。代价是最大声压低一些，
+对平板小喇叭是划算的取舍。
+（另注：每次 `tinyplay` 都会重开 PCM，所以每段都上下电一次；
+正常媒体播放时 audioserver 持有音频流，不会每首歌爆一次。）
+
 ### 遗留
 
 - 左功放（`sdw:1:0:0217:0202:00:1`）卡在 `Alert` 状态刷
