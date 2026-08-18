@@ -48,3 +48,22 @@
 7. **vendor 免构建机可写**：cmdline 加
    `androidboot.flash.locked=0 androidboot.verifiedbootstate=orange`
    后 `adb remount` 走 overlayfs；**每次重启都挂回 ro，写前重跑 remount**。
+8. ⚠️⚠️ **绝不要碰未实现的 SMMU context bank 寄存器**。reg 窗口 0x20000
+   容得下 16 个 CB，但实现了几个要看 `/proc/interrupts` 里
+   `arm-smmu-context-fault` 的条数（本机 **2** 条 = CB0 GPU + CB1 GMU 自己的
+   domain）。扫到未实现的 CB → external abort → **内核当场静默死亡**：
+   Android 连续三次启动到 post-fs-data 之后消失，无 tombstone、无 pstore
+   （cmdline 有 `efi=noruntime`，efi_pstore 根本写不进去）、adb 永不上线。
+   2026-08-19 用三次失败启动换来的。
+9. **init 解析 `/vendor/etc/init/` 下的所有文件，不只 `*.rc`**。
+   把 `smmustall.rc` 改名成 `.rc.off` **停不掉服务**（实测照样起来了）。
+   要停用必须移出该目录。
+10. **默认启动项已改成 Ubuntu**（Android 挂死时拍一下电源键就自动回落，
+   不用人到机器前选菜单）。代价：`adb reboot` 会进 Ubuntu，要进 Android 得在
+   Ubuntu 里 `sudo bootctl set-oneshot 8a29534fa802480d9fbb71aa18c01d7b-android.conf`
+   再重启（`deploy-turnip.sh` 已内置这个中转）。Android 侧设不了 ——
+   cmdline 的 `efi=noruntime` 让它没有 efivarfs。
+11. **adb 彻底不通时走 `overlay-rescue.sh`**：`adb remount` 的 scratch 是
+   super 里的 **f2fs** 逻辑分区、由 **4 段 extent** 拼成（真正那块 5.2GB 在最后），
+   要 dm-linear 按序拼回去才挂得上；而且 **7.2 内核没编 f2fs**，
+   得先用 `ubuntu-kb19` 启动项（Android 内核 + Ubuntu 根，它带 F2FS=y）。

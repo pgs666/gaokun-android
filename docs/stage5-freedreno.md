@@ -595,3 +595,130 @@ Turnip Adreno (TM) 690   turnip 崩溃 = 0
   在 context-fault 中断不通的平台上会把任何一次 fault 放大成整机死锁
   → 条件禁用，可提上游。
 - `msm_submitqueue.c:201` 抢占判断语义反转（D4）→ 可提上游。
+
+---
+
+## D10. ★★残余 fault 归零：实现 turnip 从未实现的 ANB 延迟绑定
+
+**2026-08-19。一轮"三探针"编译定性 + 一轮修复编译，把 D9 的残余 fault 打到 0。**
+
+### 三探针（`scripts/gmu-forensics/apply-diag-b1.py`）
+
+D9 收尾时只知道"还有 image 走了 v2 的安全跳过分支"，不知道是谁。
+读权威快照先立了两个硬事实：
+
+- `struct tu_image` 里 `iova` 的注释就是 **"Set when bound"** —— 未绑定就是 0；
+  且 `mem` 与 `vma` 是 **union**（所以上游那句检查先看 SPARSE_BINDING 再碰 `mem`）。
+- `tu_image_view_init()` 第 281 行 `args.iova = image->iova` ——
+  **view 的描述符在建 view 那一刻就把地址烤死了**。未绑定 → 烤进 0。
+
+于是三个探针（各限流，一轮编译全上）：
+
+| 探针 | 位置 | 抓什么 |
+|---|---|---|
+| P1 | `tu_image_bind` 的 `!mem` 分支 | image 属性 + **pNext 链的 sType** + `dladdr` 调用栈 |
+| P2 ★ | `tu_image_view_init` | 给 `iova==0` 的非 sparse image 建 view —— 真凶哨兵 |
+| P3 | `tu_allocate_transient_attachments` | 无内存 attachment 被当渲染目标的频次 |
+
+### 判决：Android loader 走的是**延迟绑定**
+
+```
+P1 NULL-bind #1 pNext=[1000010000,1000060009,] anb_mem=0x0
+                     ↑NATIVE_BUFFER_ANDROID   ↑BIND_IMAGE_MEMORY_SWAPCHAIN_INFO_KHR
+P1 image=… fmt=37 1600x2560 usage=0x97 iova=0x0 mem=0x0 anb=0 ahb=0 anb_mem=0x0
+P1 caller[1] /system/lib64/libvulkan.so
+P1 caller[2] /system/lib64/libGLESv2_angle.so
+```
+
+- **`vkCreateImage` 时根本没有 ANB**（`anb=0`）→ `vk_image_init` 没把
+  `android_buffer_type` 设成 NATIVE → `vk_android_import_anb()` 从未运行
+  → `vk.anb_memory` 为空。
+- gralloc buffer 是在 **`vkBindImageMemory2` 这一刻**才通过
+  `pNext` 的 `VkNativeBufferANDROID` 递进来的。
+- **这正是 mesa 那句 `/* TODO handle VkNativeBufferANDROID */` 指的路径**，
+  turnip 从来没实现过。于是：
+  v1 走 `UNREACHABLE`（release 下 UB）；v2 去找 create 时的 `anb_memory`
+  当然是空 → "安全跳过" → **image 永远没有内存**。
+- 66 次 SMMU fault 里 **65 次是写**，FAR 值全是
+  185344 / 186624 / 187904 / 83712 这类小地址 ——
+  正是 1600 宽 RGBA 图从 **iova 0** 起算的行偏移。闭环。
+
+### 修复（patch 0004 v3，`scripts/gmu-forensics/apply-0004v3.py`）
+
+在 `!mem` 分支里实现那个 TODO，全用 runtime 现成 helper（可直接提上游）：
+
+1. 用 bind info 的 ANB 造一份等价 `VkImageCreateInfo`；
+2. `vk_android_get_anb_layout()` 取 gralloc buffer 的真实 modifier / plane layout
+   → `tu_image_update_layout()` **重算布局**。
+   ⚠️ 这步不能省：image 默认走 UBWC，而我们的 minigbm 是
+   `nocompression=LINEAR`，不重算就是错位渲染 + 越界写。
+3. `vk_android_import_anb()` 导入 dma-buf 并绑定（它自己会再调一次
+   `BindImageMemory2`，那次 memory 非空，走正常路径落 `mem`/`iova`）。
+   重复绑定先 `FreeMemory` 掉上一块，否则轮转时每次漏一个 dma-buf。
+4. 真正无可绑定的情况保留跳过，但 `mesa_logw` 吼一声（实测该分支 0 命中）。
+
+### 验收（同一台机器，同一天，前后对比）
+
+| 指标 | v2（D9） | **v3** |
+|---|---|---|
+| SMMU fault 数 | 66 | **0** |
+| P2 给未绑定 image 建 view | 96 行 | **0** |
+| P3 无内存 attachment | 68 行 | **0** |
+| `screencap` | 从头永久卡死 | **rc=0，3.27 MB PNG** |
+| 启动 | 35s 进桌面 | 36s 进桌面 |
+| GMU 错误 / `a6xx_recover` | 0 / 0 | 0 / 0 |
+
+**截图逐像素正确**（锁屏壁纸渐变、时钟、状态栏、电量），
+无错位无花屏 → 布局重算这步是对的。
+
+### ★D6 悬案的物理机制：内核在听 678，硬件在喊 675/680
+
+给 workaround 加了一行"fault 当场读 `GICD_ISPENDR22`（INTID 704-735）"，
+一次就定性：
+
+```
+空闲基线      GICPEND22 = 0x78000000  bits 27-30 → INTID 731-734（别的设备的孤儿中断）
+每次 fault    GICPEND22 = 0x78000108  **多出 bit3 和 bit8 → INTID 707 / 712 = SPI 675 / SPI 680**
+而 /proc/interrupts 里内核注册并使能的是 INTID 710/711 = SPI 678/679，计数**恒 0**
+```
+
+- `/proc/interrupts` 实证 gpu_smmu 只注册 **2 条** `arm-smmu-context-fault`
+  （CB0=GPU，CB1=GMU 自己的 iommu domain），`GICD_ISENABLER22=0xC1`
+  → 704/710/711 确实**已在 GIC 使能**。
+- 所以不是"SMMU 不拉中断"，也不是"内核没使能"，而是
+  **GPU SMMU 实际拉的线不是 DT 里写的那两条**。
+- ⚠️ **推翻本轮规划期的判断**：我曾用 sc8180x 的 adreno_smmu 也有编号间隙
+  （全局 674 + 上下文 681 起）论证"跳号正常、DT 没问题"。
+  实测反证：DT 的 678/679 与硬件不符。
+- 下一步（可根治，DTB 级改动、无需重编内核）：把 gpu_smmu 的 context
+  interrupts 改到实测那两条，看 `/proc/interrupts` 是否开始计数、
+  内核自己的 `msm_fault_handler` 是否接管 → 成功即可**彻底丢掉轮询脚本**，
+  并把「本平台 stall-on-fault 不可用」的上游补丁改成更准确的表述。
+
+### 本轮自己踩的两个坑（都很贵）
+
+1. ⚠️⚠️ **绝不要访问未实现的 SMMU context bank**。我把监视器从"只看 CB0"
+   改成"扫满 reg 窗口的 16 个 CB"，结果 **Android 连续三次启动到
+   post-fs-data（`derive_classpath` 之后）静默死亡**：无 tombstone、
+   无 pstore（cmdline 的 `efi=noruntime` 让 efi_pstore 写不进去）、
+   adb 永不上线。未实现 CB 的 MMIO 访问 = external abort = 内核当场没了。
+   改成 `NCB=2` 后一次就正常启动。**实现了几个 CB 看 `/proc/interrupts`。**
+2. **init 会解析 `/vendor/etc/init/` 下的所有文件，不只 `*.rc`**：
+   把 rc 改名成 `.rc.off` 停不掉服务（实测照样起来）。要停用必须移出目录。
+
+### 新增运维资产
+
+- **离线救场通道 `scripts/gmu-forensics/overlay-rescue.sh`**：adb 彻底不通时
+  从 Ubuntu 侧直接读写 Android 的 vendor overlay。关键细节：
+  `adb remount` 的 scratch 是 super 里的 **f2fs** 逻辑分区、
+  由 **4 段 extent** 拼成（真正那块 5.2 GB 在最后），必须 dm-linear
+  按序拼回去；**7.2 内核没编 f2fs**，得先用 `ubuntu-kb19` 启动项
+  （Android 内核 + Ubuntu 根，它带 `F2FS_FS=y`）。另含 userdata 尸检
+  （`/data/system/environ/classpath` 等"每次启动都重写"的文件的 mtime
+  能证明 Android 到底跑到了哪一步）。
+- **默认启动项改成 Ubuntu**：Android 挂死时拍一下电源键就自动回落，
+  不需要人到机器前选菜单。代价是 `adb reboot` 进 Ubuntu，
+  要进 Android 得在 Ubuntu 里 `bootctl set-oneshot …android.conf`
+  （`deploy-turnip.sh` 已内置中转；Android 侧因 `efi=noruntime` 没有
+  efivarfs，自己设不了）。
+- `deploy-turnip.sh` 走 `scp -C`：这条链路只有几十 KB/s，压缩省一半以上时间。

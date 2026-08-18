@@ -23,8 +23,17 @@ echo "=== 3. 切回 turnip + ANGLE 路径 ==="
 adb shell 'sed -i "s/^ro.hardware.vulkan=pastel/ro.hardware.vulkan=freedreno/" /vendor/build.prop
 grep -nE "hardware.vulkan|hwui.renderer" /vendor/build.prop'
 
-echo "=== 4. 重启验证 ==="
+echo "=== 4. 重启验证（经 Ubuntu 中转）==="
+# ⚠️ 默认启动项已改成 Ubuntu（这样 Android 挂死时拍一下电源键就自动回落，
+#    不用人到机器前选菜单）。代价是 `adb reboot` 会进 Ubuntu，
+#    必须在 Ubuntu 里 `bootctl set-oneshot android` 再重启。
+#    Android 侧无法自己设：cmdline 带 efi=noruntime，没有 efivarfs。
+EGO=${EGO:-192.168.31.230}
+SSH="ssh -i $HOME/.ssh/ed25519 -o StrictHostKeyChecking=no -o ConnectTimeout=8 -o BatchMode=yes user@$EGO"
 adb reboot
+echo "等 Ubuntu 上线…"
+for i in $(seq 1 40); do $SSH true 2>/dev/null && break; sleep 6; done
+$SSH 'sudo bootctl set-oneshot 8a29534fa802480d9fbb71aa18c01d7b-android.conf && echo ONESHOT-ANDROID; sudo systemctl reboot' 2>&1 | head -2
 for i in $(seq 1 36); do
   sleep 5
   adb devices 2>/dev/null | grep -q "gaokun3.*device" || continue

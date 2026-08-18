@@ -5,54 +5,66 @@
 在华为 MateBook E Go（Snapdragon 8cx Gen 3 / sc8280xp，代号 gaokun）上跑原生 AOSP，
 最终目标是能稳定运行 arm64 手游。
 
-**当前阶段：Stage 5（GPU 攻坚中，音频/蓝牙未完）**（每次开工时更新这一行）
+**当前阶段：Stage 5（GPU 已通，正做音频/蓝牙）**（每次开工时更新这一行）
 
-> **Stage 5 GPU 战况（2026-08-18 傍晚）：GMU 之谜已破案，内核层修好，
-> 只剩一个 mesa 用户态 bug。** 详细案卷见 `docs/stage5-freedreno.md` D4–D8，
-> 工具集 `scripts/gmu-forensics/`（含 7 条会反复中招的踩坑，先读 README）。
-> - **根因不是电源管理**：`GX_BW_PERF_VOTE 超时` 是果不是因。真相是
->   GPU SMMU 撞 translation fault → 按 `SCTLR.CFCFG=1` 进入 **stall**，
->   而 **context-fault 中断从不到达 CPU**（`/proc/interrupts` 计数恒 0，
->   尽管 CFIE=1）→ 无人 resume → AHB 总线 stall → CP 断粮 → GMU 投票超时
->   → 看门狗 → stall 又拖住掉电（`cx gdsc didn't collapse`）→ 死循环。
-> - **已修（workaround 常驻）**：`scripts/gmu-forensics/smmu-nostall.sh`
->   轮询清 `SCTLR.CFCFG` 让 fault 走 terminate → **GMU 零错误持续 190s+**，
->   SF 恢复 60Hz vsync，GPU 能正常掉电。
-> - ★★**已修并验证：`*** BOOT COMPLETED ***` at t=35s，Android 用 turnip
->   硬件 GPU（Turnip Adreno 690）完整启动进桌面**，ANGLE 路径 + 桌面四进程
->   （SF/system_server/systemui/launcher3）全存活，turnip 崩溃 0。
->   **单一根因是 patch 0004 v1 自己制造的 NULL**：它在
->   `BindImageMemory2(memory=NULL)` 时返回成功却从不给 `image->mem` 赋值 →
->   ①用户态 `tu_cmd_buffer.cc:3955` 解引用 NULL（fault addr 0xd0）
->   ②内核态 `image->iova` 无效 → GPU 访问非法地址 → 上面那条 SMMU 死锁链。
->   **追了两天的"GMU 必死"全部现象归一到这一个空指针。**
->   修复见 `scripts/gmu-forensics/apply-0004v2.py`（改用 `vk.anb_memory`
->   真正绑定 + 惰性分配处加 NULL 防御），编译只需 `m vulkan.freedreno`（1.5 分钟），
->   部署 `scripts/gmu-forensics/deploy-turnip.sh`（走 overlayfs，**不刷 super**）。
-> - ⚠️ **但尚未稳定**：浸泡到第 7 分钟，SF/system_server/launcher3 全部消失
->   （`input` 服务也丢），`screencap` 从头就卡死 —— 残余 SMMU fault
->   （`smmustall` 打出 `FAR=0x100`，仍有 image 走了 v2 的"安全跳过"分支）
->   会慢慢拖垮框架。**设备已回退 `pastel` 保日常可用。**
->   这个残余 fault 就是"能启动"与"稳定可用"之间的唯一距离，
->   下一场一轮编译即可定性。
->   办法：在那个 else 分支加 `mesa_logw` 打印 image 的
->   `create_flags`/`usage`/`format`/是否 ANB。
->   一键回退软渲染：`adb remount` 后把 build.prop 的
->   `ro.hardware.vulkan` 改回 `pastel`。
-> - ⚠️ **旧结论作废**：`debug.tu.debug` 属性名是错的（正确
->   `debug.mesa.tu.debug`），故 2026-08-18 前所有 tu_debug 实验旗标从未生效；
+> **Stage 5 GPU 战况（2026-08-19 凌晨）：★GPU 攻坚完成 —— Android 用硬件
+> turnip 启动进桌面，SMMU fault 归零，帧读回正常。** 案卷
+> `docs/stage5-freedreno.md` D4–D10，工具集 `scripts/gmu-forensics/`
+> （**11 条会反复中招的坑，动手前先读 README**）。
+> - **"GMU 必死"从头到尾不是电源管理问题**，是一条空指针放大链：
+>   turnip 没实现 ANB 延迟绑定 → image 没内存、`iova` 恒 0 →
+>   **GPU 往地址 0 写** → GPU SMMU translation fault →
+>   本平台 fault 中断打不到 CPU → `SCTLR.CFCFG=1` 永久 stall →
+>   AHB 总线 stall → CP 断粮 → `GX_BW_PERF_VOTE` 超时 → 看门狗 →
+>   stall 拖住掉电（`cx gdsc didn't collapse`）→ 死循环。
+>   `GX_BW_PERF_VOTE 超时`是**果**，不是因。
+> - ★**真凶（D10 三探针实测定性）**：Android 的 libvulkan 走**延迟绑定**——
+>   `vkCreateImage` 时不带 ANB，gralloc buffer 是在 `vkBindImageMemory2`
+>   那一刻才用 `pNext` 的 `VkNativeBufferANDROID` 递进来的
+>   （实测 pNext=`{NATIVE_BUFFER_ANDROID, BIND_IMAGE_MEMORY_SWAPCHAIN_INFO_KHR}`，
+>   调用链 ANGLE → libvulkan → turnip）。mesa 那句
+>   `/* TODO handle VkNativeBufferANDROID */` 说的就是这条路，**从没人实现**。
+>   **权威修复 = `scripts/gmu-forensics/apply-0004v3.py`**
+>   （patches/0004 的 v1/v2 都是错的，v2 的"安全跳过"正是残余 fault 的来源）。
+>   编译只需 `m vulkan.freedreno`（约 1.5 分钟），部署
+>   `scripts/gmu-forensics/deploy-turnip.sh`（overlayfs，**不刷 super**）。
+> - **实测对比**：SMMU fault **66 → 0**；未绑定 image 建 view **96 → 0**；
+>   `screencap` 从**永久卡死 → rc=0 出 3.27MB 正常图**（截图逐像素正确，
+>   证明按 gralloc 真实 modifier 重算布局那步是对的）；
+>   t=36s 进桌面，GMU 错误 0，`a6xx_recover` 0，桌面四进程 PID 稳定不变。
+> - ★**D6 悬案的物理机制找到了**：fault 当场读 `GICD_ISPENDR22` 发现
+>   SMMU 拉的是 **SPI 675 / 680**，而 DT 声明、内核注册并使能的是
+>   **SPI 678/679**（`/proc/interrupts` 计数恒 0）。**内核在听 678，
+>   硬件在喊 675** —— 不是"SMMU 不拉中断"也不是"内核没使能"。
+>   ⚠️ 顺带作废我自己一度下的"DT 跳号正常"判断。
+>   下一步可根治：改 DTB 的 gpu_smmu context interrupts（不用重编内核），
+>   成功就能彻底丢掉轮询脚本。
+> - **常驻 workaround**：`scripts/gmu-forensics/smmu-nostall.sh`（轮询清
+>   `SCTLR.CFCFG` 让 fault 走 terminate + 抓 FSR/FAR/GICPEND）。
+>   ⚠️⚠️ **只能扫 CB0/CB1（`NCB=2`）**：实现了几个 CB 看
+>   `/proc/interrupts` 的 `arm-smmu-context-fault` 条数；扫到未实现的 CB
+>   → external abort → **内核静默死亡**（Android 连续三次启动到
+>   post-fs-data 后消失、无 tombstone 无 pstore 无 adb）。
+> - **运维**：cmdline 已带 `androidboot.flash.locked=0
+>   androidboot.verifiedbootstate=orange` → `adb remount` 走 overlayfs，
+>   改 vendor 不用开构建机（每次重启挂回 ro，写前重跑 remount）。
+>   **默认启动项已改成 Ubuntu**（Android 挂死拍电源键自动回落）→ 要进
+>   Android 得在 Ubuntu 里 `bootctl set-oneshot …android.conf`
+>   （deploy 脚本已内置中转）。adb 彻底不通时走
+>   `scripts/gmu-forensics/overlay-rescue.sh` 离线读写 overlay
+>   （scratch 是 super 里 4 段 extent 拼的 f2fs，要 dm-linear 拼回去，
+>   且得用 `ubuntu-kb19` 启动项才有 f2fs）。
+> - ⚠️ **旧结论作废**：属性名是 `debug.mesa.tu.debug`（不是 `debug.tu.debug`），
+>   故 2026-08-18 前所有 tu_debug 实验旗标从未生效；
 >   `msm.enable_preemption=0` 是有害参数（内核判断语义反转）已从 cmdline 删。
-> - **运维资产**：cmdline 加 `androidboot.flash.locked=0
->   androidboot.verifiedbootstate=orange` 后 `adb remount` 走 overlayfs
->   → 改 vendor 不用开构建机（每次重启挂回 ro，写前重跑 remount）。
-> mesa 26 的 AOSP 构建管线已全套打通并入库：`scripts/mesa-tool-fixes.py`
-> + `scripts/mesa-bp-merge.py` + `scripts/join_meson_continuations.py`
-> + `patches/0003..0006` + `device/huawei/gaokun3/mesa/`。
-> **当前设备跑软渲染兜底**（`ro.hardware.vulkan=pastel`，turnip 仍装在
-> vendor 里可随时切回）。音频：内核链全 =y、ADSP 三兄弟 running、
-> 固件（含 audioreach-tplg.bin）进 ramdisk+vendor，但声卡未注册
-> （macro/soundwire 的 deferred probe 不收敛，`suppress_bind_attrs`
-> 封死手动补绑定）——下一场从这里开打。
+> - mesa 26 的 AOSP 构建管线已全套入库：`scripts/mesa-tool-fixes.py`
+>   + `scripts/mesa-bp-merge.py` + `scripts/join_meson_continuations.py`
+>   + `patches/0003..0006` + `device/huawei/gaokun3/mesa/`。
+>   软渲染兜底仍在（`ro.hardware.vulkan=pastel` 一行可切回）。
+> - **下一场**：音频 —— 内核链全 =y、ADSP 三兄弟 running、固件（含
+>   audioreach-tplg.bin）进 ramdisk+vendor，但声卡未注册（macro/soundwire
+>   的 deferred probe 不收敛，`suppress_bind_attrs` 封死手动补绑定）。
+>   另有蓝牙（#30）、s2idle、以及可选的 DTB 中断根治。
 
 > **Stage 4 触摸已于 2026-08-17 完成：触摸丝滑可用。**
 > 根因是 gpio174（模式选择脚）无人驱动，见 `docs/stage4-findings.md` #26

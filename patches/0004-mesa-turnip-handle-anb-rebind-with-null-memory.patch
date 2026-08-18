@@ -30,8 +30,25 @@ release 构建下 UNREACHABLE 展开成 __builtin_unreachable()，于是变成�
 修法：ANB 图像遇到"无 memory 的重复绑定"时按 no-op 成功返回（内存已在创建
 时绑好），仅对真正非法的情况保留 UNREACHABLE。
 
-⚠️⚠️ **v1（下面这个 diff）不完整，已被 v2 取代 —— 权威实现见
-`scripts/gmu-forensics/apply-0004v2.py`（幂等，直接在 mesa 树上跑）。**
+⚠️⚠️ **v1（下面这个 diff）和 v2 都不对，权威实现是 v3 ——
+`scripts/gmu-forensics/apply-0004v3.py`（幂等，直接在 mesa 树上跑）。**
+
+v3 的判决依据（2026-08-19 三探针实测，见 docs/stage5-freedreno.md D10）：
+**Android 的 libvulkan 走延迟绑定** —— `vkCreateImage` 时**不带** ANB
+（所以 `vk_android_import_anb()` 从未运行、`vk.anb_memory` 是空的），
+gralloc buffer 是在 `vkBindImageMemory2` 这一刻才通过
+`pNext` 的 `VkNativeBufferANDROID` 递进来的：
+
+    P1 NULL-bind pNext=[1000010000, 1000060009]   ← NATIVE_BUFFER_ANDROID
+                                                    + BIND_IMAGE_MEMORY_SWAPCHAIN_INFO_KHR
+    caller: libGLESv2_angle.so → libvulkan.so → vulkan.freedreno.so
+
+也就是说 turnip 那句 `/* TODO handle VkNativeBufferANDROID */` 说的就是这条路，
+**从来没人实现过**。v3 实现它：用 bind info 的 ANB 造等价 create info →
+`vk_android_get_anb_layout()` + `tu_image_update_layout()` 按 gralloc 的真实
+modifier 重算布局（image 默认 UBWC，gralloc 可能是 LINEAR，不重算就错位/越界）
+→ `vk_android_import_anb()` 导入并绑定（重复绑定先 FreeMemory 掉上一块）。
+实测：SMMU fault 66 → **0**，screencap 从永久卡死变成 3.27MB 正常出图。
 
 v1 的致命缺陷（2026-08-18 用 addr2line + BuildId 核对定位）：no-op 分支
 **从不给 `image->mem` 赋值**，于是 `image->mem` 保持 NULL，同一个 NULL

@@ -24,7 +24,14 @@
 DM=/system/bin/devmem
 CB_BASE=$((0x3db0000))     # GPU SMMU (3da0000) context bank 0：base + numpage(16)*4K
 CB_STRIDE=$((0x1000))
-NCB=16                     # reg 窗口 0x20000 → CB 0..15
+# ⚠️⚠️ 只扫 **实际实现** 的 context bank，别扫满窗口。
+# 2026-08-19 血泪教训：v2 一度扫 CB0..CB15（reg 窗口 0x20000 容得下 16 个），
+# 结果 Android 连续三次启动到 post-fs-data（derive_classpath 之后）就静默死亡，
+# 无 tombstone、无 pstore、adb 从不上线 —— 未实现 CB 的 MMIO 访问会打出
+# external abort，把内核直接带走。
+# 实现了几个？看 /proc/interrupts：gpu_smmu 只注册 2 条 arm-smmu-context-fault
+# （INTID 710/711 = SPI 678/679）→ **CB0(GPU) + CB1(GMU 自己的 iommu domain)**。
+NCB=2
 
 CFCFG=128                  # SCTLR bit7  stall-on-fault
 SS=1073741824              # FSR   bit30 stalled state

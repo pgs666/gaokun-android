@@ -36,7 +36,7 @@ for _ in range(p_num):
     name = e[:36].split(b"\x00")[0].decode()
     attr, first, num, grp = struct.unpack_from("<IIII", e, 36)
     for j in range(first, first + num):
-        ns, tt, td = ext[j]
+        ns, tt, td, tsrc = ext[j]
         if name == "scratch":
             print("%d %d" % (td * 512, ns * 512))
 EOF
