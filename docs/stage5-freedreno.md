@@ -212,3 +212,82 @@ glslang 补丁、`turnip-shared.bp.in`。
 需要重做的部分：LineageOS 系有自己的 mesa/ANGLE 打包惯例（可能直接有
 `BOARD_MESA3D_*` 支持，见 `docs/parallel-mainline-generic.md`），
 届时优先用它们的机制，本文档的坑清单仍然适用于排障。
+
+## D4. 侦查战 2026-08-18：旧结论翻案 + 死亡现场首次完整取证
+
+**背景**：决定不等上游自己修。本节记录一整天的排除战果，工具全在
+`scripts/gmu-forensics/`。
+
+### 旧结论翻案（先纠史）
+
+- **"同一内核在 Ubuntu 下完好"此前从未被实证**——旧对照跑的是发行版
+  7.1.0-rc3 内核 + apt turnip。本日用 **kb19 本尊**（sha256
+  `35ff3019…3c5f`，/proc/version `#12 Mon Aug 17 12:50:56 UTC 2026`）
+  + Ubuntu 用户态补齐了这块：**六种负载矩阵全部无法杀死 GMU**：
+  满载 120s（52 次变频跨档）、300 轮真实 GMU 掉电冷启动（runtime
+  suspend 计数器实证 59.3s）、抢占毒参数下的抢占模式渲染（strace 实证
+  探测队列被接受）、双/三优先级 8.5 万次并发提交、churn+跨优先级组合、
+  跨客户端唤醒相位。引导条目 `ubuntu-kb19*.conf` 留在 ESP 可复用。
+- **`msm.enable_preemption=0` 是有害参数**：v7.2-rc2
+  `msm_submitqueue.c:201-205` 判断语义反转（变量名与逻辑相反），传 0
+  反而让内核接受 ALLOW_PREEMPT → turnip 进抢占模式。已从 cmdline 删除
+  （原始死法与它无关：删后同签名复死）。**该反转判断值得投上游修复**。
+- 旧排除项作废清单：governor 钉频（performance=m 不可加载，从未生效）、
+  tu_debug"全部无罪"（无结果记录）、Ubuntu 旧压测（错内核错用户态）。
+
+### 死亡现场取证（工具链 + 结论）
+
+devcoredump 解码：ascii85 按 u32 值编码（大端解）；HFI 头 =
+`id | size<<8 | seq<<20`；`scripts/gmu-forensics/{gmu-hfi-decode,
+decode-fatal,decode-gmulog,decode-ring}.py`。宿主捕获器
+`capture-death.sh`（klog 抓早期、devcd 按节点编号秒拉）。
+
+**五次受控死亡（death-capture-2..7）的统一画像**：
+
+1. 原始死法：GMU 单会话 ~2s、15 条 HFI 全部正常应答
+   （PERF_TABLE/BW_TABLE/CORE_FW_START/START + 投票 档1→档4→档8→档1 全 ACK），
+   **seq16 投票（档 8=690M，与 2 秒前刚 ACK 过的 seq14 同 payload）
+   躺在 cmd 队列 rd=244 永不被消费**。GMU 固件日志（4 词记录
+   {msg头,事件码,ts,arg}）显示 seq15（降 270M）的 ACK 是最后一条完整
+   记录——**CM3 冻死在最低频善后开始处，seq16 连接收都没记**。
+2. min_freq 钉 690（gpupin 服务）：HFI 全消费全 ACK，但 **CP 消费 16
+   个提交后停在 CP_MEM_TO_REG（读特权 memptrs）**，ring 积压 8。
+3. 禁 bootanim：死于**第 1-2 个提交**的 CP_EVENT_WRITE 0x19（缓存维护）。
+4. **统一结论：谁碰内存子系统谁冻死（CM3 的 AHB 善后 / CP 的读与缓存
+   维护），与投票内容、变频、抢占、提交数全部无关**；恢复循环
+   `cx gdsc didn't collapse` 是下游放大器。
+5. bw_index 恒 0（a690 无 .bcms，GMU 带宽表是 "single off entry, TODO"
+   占位符）；真实总线投票走 dev_pm_opp_set_opp 的 ICC 并行路径。
+
+### 已排除（本日新增，全部实测）
+
+内核版本差（kb19 在 Ubuntu 下无敌）｜ 变频/投票内容 ｜ runtime PM churn
+｜ 抢占（内核旗标与 turnip 模式双向）｜ sync_state 清理时序（gcc/gpucc
+永远 pending：GMU 设备无驱动绑定、camss 永不探测，两 OS 相同）｜
+deferred_probe_timeout 值 ｜ WiFi/PCIe 并发（initcall_blacklist 拔净
+ath11k 仍死）｜ 多进程页表切换为唯一诱因（单上下文第 1 提交也死）｜
+bootanim ｜ IFPC（a690 无 quirk）｜ ACD（DT 无 acd-level）｜
+GEMNoC workaround 缺失作为**触发器**（作为放大器仍候选）
+
+### 剩余嫌疑（按后验概率）
+
+1. **我们的 AOSP turnip 构建**（vs apt 构建，同源码同版本）——工具链
+   （AOSP clang vs gcc）或 Soong 转换配置差（生成的 defines）。
+   正在验证：Ubuntu 上 gcc 编同源码+0004 补丁跑 vkmark
+   （`scripts/gmu-forensics/mesa-lab-setup.sh`）。
+2. **cmdstream 内容差**——crashdec 反汇编死亡提交 IB（devcd 里带全部
+   BO 数据）与 apt turnip 参考流对比。
+3. Android 环境的更深层差异（LLCC/缓存属性组合等待证）。
+
+### 运维资产（本日新增，日后全用得上）
+
+- **vendor 免构建机可写**：cmdline 加
+  `androidboot.flash.locked=0 androidboot.verifiedbootstate=orange`
+  后 `adb remount` 走 overlayfs（scratch 落 super 空闲区，重启后挂 ro，
+  写前重跑 adb remount）。ro.hardware.vulkan 切换、init rc 投放、
+  build.prop 实验从此零成本。
+- 死亡复现开关：/vendor/build.prop `ro.hardware.vulkan=freedreno`（当前
+  设备处于此状态 + nobootanimation + skiavk 实验残留，**收尾时需还原**）。
+- gpupin 服务（`gpu-pin.sh`+`gpupin.rc`，seclabel u:r:shell:s0 过 init
+  校验）：等 devfreq 节点出现即写 min_freq，目标值读
+  /data/local/tmp/gpu_min_freq。
