@@ -69,12 +69,22 @@
         </mixPort>
    </mixPorts>
    <devicePorts>
-        <devicePort tagName="Speaker" type="AUDIO_DEVICE_OUT_SPEAKER" role="sink">
+        <!-- ★ address 里的 CARD_<n>_DEV_<m> 决定 HAL 开哪个 ALSA 设备：
+             hardware/interfaces/audio/aidl/default/primary/StreamPrimary.cpp
+             getCardAndDeviceId() 用 sscanf("CARD_%d_DEV_%d") 从 address 里解析，
+             解析不到就退回内置默认值（我们原本没写 address，所以从没落到扬声器）。
+             本机映射见 UCM（华为 MateBook E 直接 include ThinkPad X13s 配置）：
+               扬声器 = hw:0,1（WSA_CODEC_DMA_RX_0 ← MultiMedia2）
+               耳机   = hw:0,0（RX_CODEC_DMA_RX_0  ← MultiMedia1）
+               内置麦 = hw:0,3（VA_CODEC_DMA_TX_0  → MultiMedia4）
+               头戴麦 = hw:0,2（TX_CODEC_DMA_TX_3  → MultiMedia3） -->
+        <devicePort tagName="Speaker" type="AUDIO_DEVICE_OUT_SPEAKER" role="sink"
+                    address="CARD_0_DEV_1">
         </devicePort>
         <devicePort tagName="Telephony Tx" type="AUDIO_DEVICE_OUT_TELEPHONY_TX" role="sink">
         </devicePort>
 
-        <devicePort tagName="Built-In Mic" type="AUDIO_DEVICE_IN_BUILTIN_MIC" address="bottom" role="source">
+        <devicePort tagName="Built-In Mic" type="AUDIO_DEVICE_IN_BUILTIN_MIC" address="bottom CARD_0_DEV_3" role="source">
         </devicePort>
         <devicePort tagName="Telephony Rx" type="AUDIO_DEVICE_IN_TELEPHONY_RX" role="source">
         </devicePort>

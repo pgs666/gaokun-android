@@ -181,3 +181,127 @@ Stage 4 电源/USB 项一并处理。
 崩溃 0（蓝牙禁用后 crash buffer 全程干净）、WiFi 全程在线、
 最高温 44.8°C / 尾声 35.3°C、负载均值 ~1.1。
 今日全部改动（gpio174 触摸、ath11k 晚绑定、wifi 栈、BT 禁用）无回归。
+
+---
+
+## #33 音频：声卡不注册的真正源头是三个 `=m` + 一个固件路径（2026-08-19 完成，实机出声）
+
+`/proc/asound/cards` 一直是 `--- no soundcards ---`。链条自下而上：
+
+```
+CONFIG_PINCTRL_LPASS_LPI=m / PINCTRL_SC8280XP_LPASS_LPI=m
+  → 33c0000.pinctrl 永不绑定（Android 不加载任何模块）
+  → rx/tx/wsa macro 的 pinctrl supplier 缺席，永远 deferred
+  → 三个 soundwire 控制器等 macro → sound 节点等 DAI → 无声卡
+```
+
+实测原话（logcat，kernel）：
+
+```
+platform 3200000.rxmacro: deferred probe pending:
+  platform: wait for supplier /soc@0/pinctrl@33c0000/rx-swr-default-state
+```
+
+一起转正的还有：
+- `SC_LPASSCC_8280XP=m` → `=y`（LPASS 时钟控制器，macro 的 mclk/npl 来源）
+- `QRTR_SMD=m` → `=y`（QRTR 的 rpmsg 传输，pd-mapper 靠它与 ADSP 通信）
+- **`SND_SOC_WSA883X` 压根没编** → 本机扬声器是 wsa8830
+  （DT `compatible = "sdw10217020200"` = mfg 0x0217 / part 0x0202，
+  由 `wsa883x.c` 认领，与 ThinkPad X13s 同款）
+
+修完配置后 macro / soundwire / GPR 服务全部就位，卡在最后一步：
+
+```
+qcom-apm: tplg firmware loading qcom/sc8280xp/SC8280XP-HUAWEI-GAOKUN3-tplg.bin failed -2
+snd-sc8280xp sound: ASoC: failed to instantiate card -2
+```
+
+**新内核的拓扑固件名是 `qcom/<card->driver_name>/<card->name>-tplg.bin`**
+（`sound/soc/qcom/qdsp6/topology.c:1320` 用 `kasprintf` 拼，card 名来自 DT `model`），
+而我们按老规矩装的是 `qcom/sc8280xp/HUAWEI/gaokun3/audioreach-tplg.bin`
+—— 路径和文件名都不对。放到内核要的位置后声卡立刻注册：
+
+```
+0 [SC8280XPHUAWEIG]: sc8280xp - SC8280XP-HUAWEI-GAOKUN3
+PCM：MultiMedia1/2 Playback + MultiMedia3/4 Capture
+```
+
+### 路由（Android 没有 ALSA UCM）
+
+**华为 MateBook E 的 UCM 明确 include ThinkPad X13s 的配置**
+（`conf.d/sc8280xp/sc8280xp.conf` 里 `If.HUAWEI → /Qualcomm/sc8280xp/LENOVO-X13s.conf`），
+所以 X13s 那套控件序列与拓扑固件直接适用。PCM 映射：
+
+| 用途 | PCM | 通路 |
+|---|---|---|
+| 扬声器 | **hw:0,1** | `WSA_CODEC_DMA_RX_0 ← MultiMedia2` |
+| 耳机 | hw:0,0 | `RX_CODEC_DMA_RX_0 ← MultiMedia1` |
+| 头戴麦 | hw:0,2 | `TX_CODEC_DMA_TX_3 → MultiMedia3` |
+| 内置麦 | hw:0,3 | `VA_CODEC_DMA_TX_0 → MultiMedia4` |
+
+开机自动摆路由：`device/huawei/gaokun3/bin/audio-route.sh` +
+`etc/audioroute.rc`（等 `/dev/snd/controlC0` 出现后按 UCM 序列设 WSA 通路，PA=17）。
+
+### 框架层接入
+
+AOSP 的 AIDL 音频 HAL **自带 ALSA 后端**（`alsa/StreamAlsa.cpp` 等），
+而它开哪张卡由 device port 的 **address 字符串**决定：
+`primary/StreamPrimary.cpp getCardAndDeviceId()` 用
+`sscanf("CARD_%d_DEV_%d")` 从 address 里解析，解析不到就退回内置默认值。
+我们原本没写 address → 永远落不到扬声器。改成
+`address="CARD_0_DEV_1"` 后 HAL 日志实证：
+
+```
+AHAL_StreamPrimary: getCardAndDeviceId: parsed with card id 0, device id 1
+```
+
+### 验收
+
+`tinyplay /data/local/tmp/*.wav -D 0 -d 1` 实机出声（用户确认），
+`/proc/asound/card0/pcm1p/sub0/status` 播放中为 `state: RUNNING`。
+2026-08-19 用 ffmpeg 转码的整曲（48kHz 立体声 2'34"）完整放完。
+
+### 遗留
+
+- 左功放（`sdw:1:0:0217:0202:00:1`）卡在 `Alert` 状态刷
+  `Bus clash detected`（2607 次），右功放 `Attached` 正常；出声不受影响。
+- `qcom-soundwire` 报 `din-ports/dout-ports mismatch with controller`（DT 端口数与
+  控制器不符），暂未影响功能。
+- 框架层只验证到"HAL 指向正确 PCM"，尚未用真播放器跑通媒体音
+  （`cmd notification post` 默认无声音渠道，测不出来）。
+- shell 用户不在 `audio` 组 → 非 root 下 `tinyplay` 会 "cannot open device"。
+
+## #34 蓝牙：内核早就通了，缺 HAL + 一个调度器配置（2026-08-19 完成）
+
+`hci0` 其实一直在（`BT_QCA`/`BT_HCIUART_QCA` 都是 `=y`，`hci_qca` 绑在
+`988000.serial:0.0` 的 serdev 上）。#30 说的"无 HCI HAL"两步补齐：
+
+1. **AOSP 自带的 HAL 就支持 Linux HCI**：
+   `hardware/interfaces/bluetooth/aidl/default/BluetoothHci.cpp:172`
+   先 `NetBluetoothMgmt::openHci()`（BT 管理 socket + `HCI_CHANNEL_USER`），
+   失败才退回串口路径。**一行代码没改**，把
+   `android.hardware.bluetooth-service.default` + 它的 `.rc` + VINTF 片段 +
+   `android.hardware.bluetooth-V1-ndk.so` 走 overlay 推进 vendor 即可（不刷 super）。
+   ⚠️ 少推那个 `-V1-ndk.so` 会得到 `CANNOT LINK EXECUTABLE ... not found`
+   的 5 秒重启循环。
+2. ★**真凶与 HAL 无关**：
+   ```
+   bluetooth: message_loop_thread.cc:291 EnableRealTimeScheduling:
+     unable to set SCHED_FIFO priority 1 for bt_main_thread, error: Operation not permitted
+   → bluetooth::log::fatal → com.android.bluetooth abort
+   ```
+   `CONFIG_RT_GROUP_SCHED=y` + `CGROUP_SCHED` 时，非 root cpu cgroup 的
+   `rt_runtime_us` 默认是 0 → 该 cgroup 内任何 `sched_setscheduler(SCHED_FIFO)`
+   一律 EPERM。**GKI 里这项是关的**，主线 defconfig 默认开。关掉即好。
+
+验收：`svc bluetooth enable` → `dumpsys bluetooth_manager` 显示
+`enabled: true / state: ON / address:（从芯片读出）/ name: MateBook E Go`，
+`com.android.bluetooth` 崩溃 0 次，`EnableRealTimeScheduling` 报错 0 次。
+
+## #35 方法论：`kernel-config-android.sh` 现在自带断言
+
+"Android 不加载模块，`=m` 等于驱动缺席"这个坑本项目踩了 **12 次**
+（WiFi 的 PWRSEQ、USB_STORAGE、这次的 LPASS pinctrl…）。脚本已改为：
+自己跑 `olddefconfig`（把致命的 `ARCH=arm64` 固定住），跑完断言
+**35 个必须 `=y`**、**1 个必须 `=n`**（`RT_GROUP_SCHED`），
+另查 `CONFIG_LSM` 必须含 `selinux` 且不含 `apparmor`，不达标非零退出。
