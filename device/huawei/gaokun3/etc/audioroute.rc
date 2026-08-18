@@ -1,0 +1,11 @@
+# 开机应用扬声器混音器路由（Android 无 ALSA UCM，见 bin/audio-route.sh）。
+# 声卡注册在 ADSP 的 GPR 服务就绪之后，所以脚本自己等 /dev/snd/controlC0。
+service audioroute /vendor/bin/audio-route.sh
+    user root
+    group root audio
+    seclabel u:r:shell:s0
+    oneshot
+    disabled
+
+on property:sys.boot_completed=1
+    start audioroute
