@@ -18,11 +18,24 @@
 > - **已修（workaround 常驻）**：`scripts/gmu-forensics/smmu-nostall.sh`
 >   轮询清 `SCTLR.CFCFG` 让 fault 走 terminate → **GMU 零错误持续 190s+**，
 >   SF 恢复 60Hz vsync，GPU 能正常掉电。
-> - **剩余唯一障碍（下一场首选，只需重编 vulkan.freedreno.so ~15 分钟）**：
->   turnip 在 ANGLE 的 dynamic-rendering 收尾处 NULL deref
->   （`tu_cmd_render+324` 读 `NULL+0xd0`）。旁路 `debug.hwui.renderer=skiavk`
->   能让该崩溃归零、启动推进到 launcher3，但撞 AOSP HWUI 断言
->   （HWUI 要 2 个 Vulkan 队列，turnip 只报 1 个）。修好 mesa 即通。
+> - ★★**已修并验证：`*** BOOT COMPLETED ***` at t=35s，Android 用 turnip
+>   硬件 GPU（Turnip Adreno 690）完整启动进桌面**，ANGLE 路径 + 桌面四进程
+>   （SF/system_server/systemui/launcher3）全存活，turnip 崩溃 0。
+>   **单一根因是 patch 0004 v1 自己制造的 NULL**：它在
+>   `BindImageMemory2(memory=NULL)` 时返回成功却从不给 `image->mem` 赋值 →
+>   ①用户态 `tu_cmd_buffer.cc:3955` 解引用 NULL（fault addr 0xd0）
+>   ②内核态 `image->iova` 无效 → GPU 访问非法地址 → 上面那条 SMMU 死锁链。
+>   **追了两天的"GMU 必死"全部现象归一到这一个空指针。**
+>   修复见 `scripts/gmu-forensics/apply-0004v2.py`（改用 `vk.anb_memory`
+>   真正绑定 + 惰性分配处加 NULL 防御），编译只需 `m vulkan.freedreno`（1.5 分钟），
+>   部署 `scripts/gmu-forensics/deploy-turnip.sh`（走 overlayfs，**不刷 super**）。
+> - **残余（下一场，一轮编译即可定性）**：还有少量 SMMU fault
+>   （`smmustall` 打出 `FAR=0x100`）→ 仍有 image 走了 v2 的"安全跳过"分支；
+>   症状是 `screencap` 会卡、启动期少量 GMU 错误（进桌面后基本不再新增）。
+>   办法：在那个 else 分支加 `mesa_logw` 打印 image 的
+>   `create_flags`/`usage`/`format`/是否 ANB。
+>   一键回退软渲染：`adb remount` 后把 build.prop 的
+>   `ro.hardware.vulkan` 改回 `pastel`。
 > - ⚠️ **旧结论作废**：`debug.tu.debug` 属性名是错的（正确
 >   `debug.mesa.tu.debug`），故 2026-08-18 前所有 tu_debug 实验旗标从未生效；
 >   `msm.enable_preemption=0` 是有害参数（内核判断语义反转）已从 cmdline 删。

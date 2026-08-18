@@ -565,6 +565,18 @@ Turnip Adreno (TM) 690   turnip 崩溃 = 0
 顺带把 SELinux 标签从 `vendor_file` 改正为 `same_process_hal_file`
 （与 vulkan.pastel.so 对齐；此前 app 加载它一直有 avc denied）。
 
+### ⚠️ 浸泡暴露的边界：能启动，但撑不住持续运行
+
+启动后 2 分钟浸泡（每 20s 采样）：`boot_completed=1` 一直在，GMU 错误在
+7–9 之间小幅波动（缓冲轮转 + 零星新增，不是雪崩）。但**到第 7 分钟，
+`surfaceflinger` / `system_server` / `launcher3` 全部消失，`input` 服务
+也没了** —— 框架被残余 fault 慢慢拖垮。`screencap` 从一开始就卡死
+（>3 分钟无返回），说明 GPU 的帧读回路径也踩在同一个坑上。
+
+**所以 D9 的准确表述是**：主因已修、里程碑达成（首次用硬件 GPU 进桌面），
+但**尚未稳定可用**，设备已回退 `ro.hardware.vulkan=pastel` 保持日常可用。
+剩下的就是下面这个残余 fault —— 它是"稳定"与"能启动"之间的唯一距离。
+
 ### 残余问题（下一场）
 
 - **仍有少量 SMMU fault**：`smmustall` 打出 `FAR=0x100`、
