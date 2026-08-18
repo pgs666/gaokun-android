@@ -484,3 +484,35 @@ overlay 侧另有 `scripts/gmu-forensics/tudebug.rc`）。
 - 若绕行有效 → 系统可用，ANGLE 只留给纯 GLES 应用，turnip bug 单独修
 - 若无效 → 需源码级定位：VM 里给 turnip 编 debug 符号版，或对
   `tu_cmd_render+324` 反汇编确认 +0xd0 是哪个字段，然后修 mesa（可提上游）
+
+## D8. 两条用户态路径的堵点都已精确定位（下一场只需一次 VM 会话）
+
+GPU/内核层解决后（D6），Android 上剩下两条渲染路径，各有一个**明确的**障碍：
+
+| 路径 | 配置 | 障碍 | 证据 |
+|---|---|---|---|
+| **GLES→ANGLE→Vulkan**（默认，`debug.hwui.renderer=skiagl`） | ANGLE 提供 GLES | turnip 在 **dynamic-rendering 收尾**处 NULL deref | `tu_cmd_render+324` 读 `NULL+0xd0`，栈经 `vk_common_CmdEndRendering` → `tu_CmdEndRendering2EXT` ← ANGLE `flushToPrimary` |
+| **HWUI 直连 Vulkan**（`debug.hwui.renderer=skiavk`） | 绕开 ANGLE | **HWUI 要 2 个队列，turnip 只报 1 个** | `Abort message: Assertion failed: queueProps[i].queueFamilyProperties.queueCount < kRequestedQueueCount`（AOSP `VulkanManager.cpp`，`kRequestedQueueCount=2`，用于 protected/unprotected 双队列） |
+
+**skiavk 实验的正面结果**：切到 skiavk 后 **`tu_cmd_render` 崩溃归零**
+（60s+ 零次，此前每 5 秒涨数次），启动推进到 **launcher3 已出现**（此前只到
+systemui）→ 反证了 ANGLE 的 dynamic-rendering 用法确实是那个 NULL deref 的
+唯一触发源。SurfaceFlinger 用 `debug.renderengine.backend=skiavkthreaded`
+全程存活（SF 的 RenderEngine 只要 1 个队列），说明 **skia+turnip 本身是通的**。
+
+### 下一场的两个候选（按性价比）
+
+1. ★**修 turnip 的 NULL deref**（推荐）：只需重编 `vulkan.freedreno.so`
+   （~15 分钟），改 mesa 源码。定位手段：给 tu_cmd_render 路径加断言/日志，
+   或对 `tu_cmd_render+324` 反汇编确认 `+0xd0` 是哪个字段
+   （嫌疑：`cmd->state.pass` / `attachments` / `tiling` 在 ANGLE 的
+   suspend-resume / secondary-CB 用法下未建立）。**修好即可提上游**，
+   且 ANGLE 路径同时供 GLES 游戏使用 —— 与 Stage 5 目标一致。
+2. 改 AOSP HWUI 的 `kRequestedQueueCount` 为 1：绕开队列断言，但要重编
+   framework（慢），且 protected content 路径存疑。
+
+### 设备当前状态（收尾）
+
+已还原软渲染兜底可用态（`ro.hardware.vulkan=pastel`、`debug.hwui.renderer=skiagl`），
+**SMMU workaround 服务保留常驻**（对将来 turnip 复用是必需的，且 pastel 下
+GPU 不初始化时脚本读到 0 自动不动作，无副作用）。turnip 仍在 vendor 里。
