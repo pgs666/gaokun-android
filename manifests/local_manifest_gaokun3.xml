@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  gaokun3 在 crDroid 16.0 树里的额外项目。
+
+  用法（构建机上）：
+      cp manifests/local_manifest_gaokun3.xml ~/crdroid/.repo/local_manifests/
+      repo sync
+
+  crDroid 16.0 的 manifest（1180 个项目）里【已经有】的，这里不重复列：
+      device/generic/goldfish        LineageOS/android_device_generic_goldfish
+                                    （WiFi HAL 用它的 libwifi-hal-emu）
+      external/mesa3d               platform/external/mesa3d @ android-16.0.0_r4
+                                    （= mesa 26.0.3，与我们打过补丁的快照同一版）
+      external/minigbm              platform/external/minigbm
+      external/drm_hwcomposer       platform/external/drm_hwcomposer
+      external/deqp-deps/glslang    platform/external/deqp-deps/glslang
+      vendor/lineage                crdroidandroid/android_vendor_crdroid
+  以上均于 2026-08-19 用 `repo manifest -o -` 逐条核实。
+-->
+<manifest>
+  <!--
+    device/linaro/dragonboard —— 唯一需要补的项目。
+    db845c 是树内唯一的"高通主线内核 + minigbm + drm_hwcomposer"参考设备，
+    我们的 BoardConfig.mk 直接引用它两个 sepolicy 目录：
+        shared/graphics/minigbm_msm/sepolicy
+        shared/graphics/swangle/sepolicy
+    crDroid/LineageOS 的 manifest 不带它（Lineage 不支持这类开发板）。
+
+    remote="aosp" 继承 aosp remote 的 revision refs/tags/android-16.0.0_r4，
+    已用 git ls-remote 验证该 tag 存在（685cd7ce06fd）。
+  -->
+  <project path="device/linaro/dragonboard" name="device/linaro/dragonboard"
+           remote="aosp" />
+</manifest>

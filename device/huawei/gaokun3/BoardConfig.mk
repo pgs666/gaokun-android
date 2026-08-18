@@ -141,3 +141,24 @@ BOARD_HOSTAPD_DRIVER := NL80211
 # ramdisk 副本必须落在 /lib/firmware（内核的固件回落搜索路径），只能开这个
 # 官方逃生开关。vendor 路径（/vendor/firmware/...）不含 lib 组件，本来就豁免。
 BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES := true
+
+# ══════════════════════════════ crDroid / LineageOS ══════════════════════════
+# Stage 6：转 crDroid 16.0（= LineageOS 23.2 布局）。
+#
+# ⚠️ 必须在 include BoardConfigLineage.mk 【之前】关掉 recovery：
+#    vendor/lineage/config/BoardConfigLineage.mk 第一行是
+#        BOARD_USES_FULL_RECOVERY_IMAGE ?= true
+#    `?=` 意味着我们先赋值就能覆盖它。本机是 UEFI + systemd-boot，
+#    没有 recovery 分区也没有 fastboot，recovery 镜像既造不出也用不上。
+BOARD_USES_FULL_RECOVERY_IMAGE := false
+
+# ⚠️ 高通 CAF 那套（hardware/qcom-caf/*）绝对不能开：8cx 从来没有 Android BSP，
+#    我们走的是纯主线内核 + 自建 HAL。BoardConfigLineage.mk 会按这个变量
+#    决定是否 include BoardConfigQcom.mk。
+BOARD_USES_QCOM_HARDWARE := false
+
+# 内核在树外自己编（kb21 / v7.2-rc2 + gaokun3 补丁），不让 Lineage 的
+# kernel.mk 去找 kernel/huawei/gaokun3。TARGET_NO_KERNEL 已在上面设过。
+TARGET_KERNEL_SOURCE :=
+
+include vendor/lineage/config/BoardConfigLineage.mk

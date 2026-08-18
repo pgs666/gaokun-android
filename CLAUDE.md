@@ -5,7 +5,7 @@
 在华为 MateBook E Go（Snapdragon 8cx Gen 3 / sc8280xp，代号 gaokun）上跑原生 AOSP，
 最终目标是能稳定运行 arm64 手游。
 
-**当前阶段：硬件全线打通（GPU/音频/蓝牙/WiFi/触摸），准备转 crDroid**（每次开工时更新这一行）
+**当前阶段：Stage 6 — crDroid 16.0 移植中（M0：构建机已腾空，`repo sync` 进行中）**（每次开工时更新这一行）
 
 > **★决策（2026-08-19）：硬件使能告一段落，下一步转 crDroid 移植。**
 > 理由：剩下卡住的东西（App/媒体没声音）**不是硬件或内核问题**，
@@ -14,7 +14,21 @@
 > `ro.media.xml_variant.*` 全未设）、`/system/media/audio/` 整个缺失
 > （铃声/UI 音效一个没有）。这些是 Lineage/crDroid 设备树的标准组成部分，
 > 换轨后大概率自动消失。详见 `docs/stage4-findings.md` #36。
-> - **已定：直接上 crDroid**（不先过 Lineage）；构建机磁盘方案待 `df` 后定。
+> - **已定：直接上 crDroid**（不先过 Lineage）。执行案卷 `docs/stage6-crdroid.md`。
+>   - crDroid `16.0` = LineageOS 23.2 布局，AOSP 基线 tag **`android-16.0.0_r4`**；
+>     `lunch lineage_gaokun3-bp4a-userdebug`（release config `bp4a`，实名核实）。
+>   - manifest 1180 个项目，本机只缺 `device/linaro/dragonboard`
+>     → `manifests/local_manifest_gaokun3.xml`。
+>   - ★**铃声缺口 crDroid 自带解决**（`vendor/lineage/audio/audio.mk` 装 44 个音频到
+>     `product/media/audio/`）；★**解码器缺口它不管** → `media_codecs.xml` 仍要我们装。
+>   - ★**mesa 管线一个都不能丢**：lineage-23.2 的 `external/mesa3d` 就是 AOSP 那份，
+>     `BOARD_MESA3D_*` 是平行项目自带 mesa 仓库的机制，不是 Lineage 的
+>     （作废 `docs/stage5-freedreno.md:212` 的猜测）。**但好消息**：我们打过补丁的
+>     mesa 是 **26.0.3 @ android-16.0.0_r4**，与 crDroid 同一 tag → 管线逐字可套，
+>     最差直接铺回归档树 `~/keep/mesa3d-patched.tar.zst`。
+>   - 构建机磁盘：**整棵删了 `~/aosp`**（157G → 451G 可用）。
+>     "只删 out 腾到 264G"的算术不够 —— crDroid 源码+.repo≈190G + out 100–130G。
+>     删之前已归档 `~/keep/`（super/ramdisk/turnip.so/mesa 全树，`sha256sum -c` 通过）。
 > - **可平移的成果（换 ROM 不用重做）**：kb21 内核配置 +
 >   `scripts/kernel-config-android.sh` 的断言、DTB（含 gpio174 触摸补丁）、
 >   固件集与 audioreach 拓扑固件的**正确路径名**、mesa turnip
