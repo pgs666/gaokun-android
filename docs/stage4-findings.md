@@ -276,6 +276,23 @@ AHAL_StreamPrimary: getCardAndDeviceId: parsed with card id 0, device id 1
 （另注：每次 `tinyplay` 都会重开 PCM，所以每段都上下电一次；
 正常媒体播放时 audioserver 持有音频流，不会每首歌爆一次。）
 
+### ⚠️ 设备上一个系统音效文件都没有
+
+`/system/media/audio/` **整个目录不存在** —— 铃声、通知音、闹钟、UI 音效
+（`Effect_Tick.ogg` 等）全都没装。所以：
+
+- `cmd notification post`、音量键提示音、点击音效**天然无声**，
+  不是通路问题（我一度用它们做验证，测不出东西）。
+- 想要这些音效，需要在 device.mk 里 inherit AOSP 的音频资源包
+  （`frameworks/base/data/sounds/` 下有若干 `.mk`：`AllAudio.mk` 是全量，
+  另有若干按机型裁剪的 `AudioPackage*.mk`）。
+  ⚠️ **具体该 inherit 哪个必须先在 AOSP 树里核实**（本项目规矩：不凭记忆写路径），
+  下次开构建机时 `ls frameworks/base/data/sounds/*.mk` 确认后再加。
+- 验证框架层媒体音只能靠真播放器：`com.android.music` 已装（AOSP 音乐播放器），
+  但它只显示 MediaStore 里的内容，而 `adb push` 到 `/sdcard/Music/` 后
+  MediaProvider 并未自动收录（`cmd media_provider` 在本版本不存在，
+  `MEDIA_MOUNTED` 广播也没触发重扫）。
+
 ### 遗留
 
 - 左功放（`sdw:1:0:0217:0202:00:1`）卡在 `Alert` 状态刷
