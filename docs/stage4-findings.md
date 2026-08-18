@@ -337,3 +337,44 @@ AHAL_StreamPrimary: getCardAndDeviceId: parsed with card id 0, device id 1
 自己跑 `olddefconfig`（把致命的 `ARCH=arm64` 固定住），跑完断言
 **35 个必须 `=y`**、**1 个必须 `=n`**（`RT_GROUP_SCHED`），
 另查 `CONFIG_LSM` 必须含 `selinux` 且不含 `apparmor`，不达标非零退出。
+
+## #36 框架层媒体音的真正拦路虎：`MediaCodecList` 是空的（AOSP 产品配置缺失）
+
+音频**输出**通路已经完备，有硬证据：
+
+- HAL 指向正确的 ALSA 设备：`AHAL_StreamPrimary: getCardAndDeviceId: parsed with card id 0, device id 1`
+- AudioFlinger 有两个 48kHz 输出线程（`AudioOut_D` / `AudioOut_1D`）
+- `tinyplay` 直连 ALSA 出声正常（用户实听确认，整曲 2'34" 放完）
+
+但任何 App/媒体播放都失败，栈底原因是**解码器一个都没有**：
+
+```
+E NuPlayerDecoder: Failed to create audio/mpeg decoder
+E NuPlayer: received error(0x80000000) from audio decoder
+D MediaPlayerService: OMX service is not available
+dumpsys media.player → "Decoder infos by media types:" （空）
+```
+
+排查过程（都是实测，不是推断）：
+
+| 检查 | 结果 |
+|---|---|
+| `media.swcodec` / `mediaserver` / `media.extractor` 进程 | 都在跑 |
+| C2 软件服务注册 | 在：`android.hardware.media.c2.IComponentStore/software` |
+| VINTF 声明 | 在：`/system/etc/vintf/manifest/manifest_media_c2_software.xml`（AIDL + HIDL 双声明）|
+| `hwservicemanager` | **不在**（Android 15+ 已移除 HIDL），所以 HIDL 那条声明是死的，只能走 AIDL |
+| `/vendor/etc/media_codecs.xml` | **原本不存在** → 从 `/apex/com.android.media.swcodec/etc/media_codecs.xml` 拷了一份进 vendor + 重启媒体栈 |
+| 拷贝后 | `MediaCodecList` **仍然是空的**（decoders 和 encoders 都空）|
+| `ro.media.xml_variant.*` 属性 | **全部未设置** |
+| swcodec 进程日志 | 一行都没有（连启动信息都没打）|
+
+→ 结论：这是 **AOSP 产品配置层的缺口**，不是硬件或内核问题。
+一个正常 ROM 的设备配置会带齐 `media_codecs.xml` /
+`media_codecs_performance.xml` / `media_profiles.xml` /
+`ro.media.xml_variant.*` 一整套；我们这棵手搓的最小 AOSP 从来没配过。
+同理 `/system/media/audio/`（铃声/UI 音效）也整个缺失（见上一节）。
+
+**这条正是"换 crDroid（LineageOS 系）比继续修手搓 AOSP 更划算"的最好论据**：
+这些产品级配置是 Lineage 设备树的标准组成部分，换轨后大概率自动消失，
+而我们所有的硬件使能成果（内核配置、DTB、固件路径、turnip 补丁、
+混音器路由脚本、SMMU workaround）**全部可平移**。
