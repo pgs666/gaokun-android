@@ -114,6 +114,10 @@ BOARD_VENDOR_SEPOLICY_DIRS += device/linaro/dragonboard/shared/graphics/swangle/
 
 # --------------------------------------------------------------- VINTF
 DEVICE_MANIFEST_FILE := device/huawei/gaokun3/manifest.xml
+# vendor 侧兼容性矩阵（"我们对 framework 的要求"）。内容为空，但文件必须存在
+# —— 缺了它 checkvintf 会在 "Checking vendor matrix" 处报
+#    "ERROR: Cannot fetch vendor matrix." 并让构建在 97% 中止（2026-08-19 实测）。
+DEVICE_MATRIX_FILE += device/huawei/gaokun3/compatibility_matrix.xml
 
 #
 # 刻意【不】设置的项 —— 都已对 AOSP 16 源码核实：

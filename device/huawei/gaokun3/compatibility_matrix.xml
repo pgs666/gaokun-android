@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  VINTF *device*（vendor 侧）兼容性矩阵 —— Huawei MateBook E Go (gaokun3)
+
+  它表达的是"vendor 分区对 framework 有什么要求"，与 manifest.xml
+  （"vendor 提供什么"）方向相反。
+
+  本机【没有】任何 vendor→framework 的额外要求：
+  没有 modem、没有高通 CAF 那套 vendor 服务、所有 HAL 都是 AOSP 自带实现。
+  所以这里刻意保持为空 —— 空矩阵在 checkvintf 里是平凡兼容的。
+
+  为什么必须有这个文件（2026-08-19 实测）：
+      checkvintf --check-one 在"Checking vendor manifest"通过后会接着
+      "Checking vendor matrix"，两个候选路径都找不到就直接失败：
+        Fetch '.../vendor/etc/vintf/compatibility_matrix.xml': NAME_NOT_FOUND
+        Fetch '.../vendor/compatibility_matrix.xml':           NAME_NOT_FOUND
+        ERROR: Cannot fetch vendor matrix.
+      构建会在 97% 处中止（Stage 6 M1 的第二次构建就死在这里）。
+
+  样板与接线方式来自树内实名核实：
+      device/google/trout/compatibility_matrix.xml       （格式）
+      device/google/trout/aosp_trout_x86_64.mk:37        （DEVICE_MATRIX_FILE +=）
+      build/make/core/soong_config.mk:681                （转成 soong 的 DeviceMatrixFile）
+      build/soong/android/vintf_data.go:85               （消费者）
+-->
+<compatibility-matrix version="1.0" type="device">
+</compatibility-matrix>
