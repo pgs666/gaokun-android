@@ -219,9 +219,21 @@ PRODUCT_COPY_FILES += \
 #   qcdxkmsuc8280.mbn   GPU zap shader（freedreno 必需，缺则 GPU 锁在安全模式）
 #   audioreach-tplg.bin 音频拓扑（缺则声卡不注册）
 #   *.jsn               pd_mapper 服务表
+# ★★ 拓扑固件必须装成【内核实际请求的那个名字】：
+#     sound/soc/qcom/qdsp6/topology.c:1320 拼的是
+#         qcom/<card->driver_name>/<card->name>-tplg.bin
+#     本机 = qcom/sc8280xp/SC8280XP-HUAWEI-GAOKUN3-tplg.bin
+#     （dmesg 实测：qcom-apm: tplg firmware loading ... failed -2，
+#       见 docs/stage4-findings.md #33 第 219 行）
+#     老规矩的 HUAWEI/gaokun3/audioreach-tplg.bin 内核【从不去读】，
+#     两份内容 sha256 完全相同（24296 字节），所以同一个源文件装两遍。
+#
+# ⚠️ 这一条 Stage 4 只在实机 overlay 里手动补过，从没写进构建配置
+#     —— 2026-08-19 转 crDroid 时才发现（否则 crDroid 首boot 声卡不注册）。
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/qcdxkmsuc8280.mbn:$(TARGET_COPY_OUT_VENDOR)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/qcdxkmsuc8280.mbn \
     $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/audioreach-tplg.bin:$(TARGET_COPY_OUT_VENDOR)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/audioreach-tplg.bin \
+    $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/audioreach-tplg.bin:$(TARGET_COPY_OUT_VENDOR)/firmware/qcom/sc8280xp/SC8280XP-HUAWEI-GAOKUN3-tplg.bin \
     $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/qcvss8280.mbn:$(TARGET_COPY_OUT_VENDOR)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/qcvss8280.mbn \
     $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/adspr.jsn:$(TARGET_COPY_OUT_VENDOR)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/adspr.jsn \
     $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/adspua.jsn:$(TARGET_COPY_OUT_VENDOR)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/adspua.jsn \
@@ -236,6 +248,7 @@ PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/qcslpi8280.mbn:ramdisk/lib/firmware/qcom/sc8280xp/HUAWEI/gaokun3/qcslpi8280.mbn \
     $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/qcdxkmsuc8280.mbn:ramdisk/lib/firmware/qcom/sc8280xp/HUAWEI/gaokun3/qcdxkmsuc8280.mbn \
     $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/audioreach-tplg.bin:ramdisk/lib/firmware/qcom/sc8280xp/HUAWEI/gaokun3/audioreach-tplg.bin \
+    $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/audioreach-tplg.bin:ramdisk/lib/firmware/qcom/sc8280xp/SC8280XP-HUAWEI-GAOKUN3-tplg.bin \
     $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/qcvss8280.mbn:ramdisk/lib/firmware/qcom/sc8280xp/HUAWEI/gaokun3/qcvss8280.mbn \
     $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/adspr.jsn:ramdisk/lib/firmware/qcom/sc8280xp/HUAWEI/gaokun3/adspr.jsn \
     $(LOCAL_PATH)/firmware/qcom/sc8280xp/HUAWEI/gaokun3/adspua.jsn:ramdisk/lib/firmware/qcom/sc8280xp/HUAWEI/gaokun3/adspua.jsn \

@@ -23,11 +23,16 @@ scripts/gmu-forensics/*.so
 scripts/gmu-forensics/b1-*/
 
 # 固件 blob 不进版本库：
-#   qca/ + a660_* 来自 linux-firmware >= 20241210（有再分发许可但没必要占仓库）
-#   HUAWEI/gaokun3/*.mbn 是华为专有固件（linux-firmware 里没有），
-#   从本机 Linux 的 /lib/firmware/ 或 Windows 驱动包提取，不可公开再分发。
+#   qca/ + a660_* + ath11k/ 来自 linux-firmware >= 20241210
+#     （有再分发许可，但没必要占仓库）
+#   HUAWEI/gaokun3/ 下的 *.mbn（ADSP/CDSP/SLPI/zap shader/vss）、
+#     *.jsn（pd_mapper 服务表）、audioreach-tplg.bin 与
+#     sc8280xp/SC8280XP-HUAWEI-GAOKUN3-tplg.bin 都是华为专有固件
+#     （linux-firmware 里没有），不可公开再分发。
 # 获取方法见 device/huawei/gaokun3/firmware/README.md
-device/huawei/gaokun3/firmware/**/*.mbn
-device/huawei/gaokun3/firmware/**/*.bin
-device/huawei/gaokun3/firmware/**/*.fw
-device/huawei/gaokun3/firmware/**/*.tlv
+#
+# ⚠️ 这里【整目录忽略 + 只放行 README.md】，不按扩展名白名单列。
+#    2026-08-19 踩过：原先只列了 mbn/bin/fw/tlv，从设备上捞回固件时
+#    四个 *.jsn 直接变成待提交文件。新固件迟早再出现新扩展名。
+device/huawei/gaokun3/firmware/**
+!device/huawei/gaokun3/firmware/README.md
