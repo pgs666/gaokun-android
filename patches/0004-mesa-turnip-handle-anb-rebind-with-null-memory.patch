@@ -30,6 +30,27 @@ release 构建下 UNREACHABLE 展开成 __builtin_unreachable()，于是变成�
 修法：ANB 图像遇到"无 memory 的重复绑定"时按 no-op 成功返回（内存已在创建
 时绑好），仅对真正非法的情况保留 UNREACHABLE。
 
+⚠️⚠️ **v1（下面这个 diff）不完整，已被 v2 取代 —— 权威实现见
+`scripts/gmu-forensics/apply-0004v2.py`（幂等，直接在 mesa 树上跑）。**
+
+v1 的致命缺陷（2026-08-18 用 addr2line + BuildId 核对定位）：no-op 分支
+**从不给 `image->mem` 赋值**，于是 `image->mem` 保持 NULL，同一个 NULL
+制造两个看似无关的故障：
+
+  1. 用户态：`tu_allocate_transient_attachments()` 里
+     `!iview->image->mem->bo` 解引用 NULL → SIGSEGV
+     （tu_cmd_buffer.cc:3955，fault addr 0xd0 = offsetof(mem, bo)）
+  2. 内核态：该 image 的 `iova` 无效 → GPU 访问非法地址 → **GPU SMMU
+     translation fault** → 本平台 context-fault 中断不通、无人 resume
+     → SMMU 永久 stall → AHB stall → CP 断粮 → GMU 投票超时 → 看门狗
+     → 掉电失败 → 死循环（追了两天的"GMU 必死"，见 docs D4–D8）
+
+v2 的修法：NULL memory 时改用 `image->vk.anb_memory`
+（vkCreateImage 时 `vk_android_import_anb()` 导入的真实内存）装进
+`image->mem`；连它也没有才安全跳过（不再走 UB）。同时给
+`tu_allocate_transient_attachments()` 加 `iview->image->mem &&` 防御
+——没有内存自然不需要惰性分配。
+
 Apply to: external/mesa3d/src/freedreno/vulkan/tu_image.cc
 
 --- a/src/freedreno/vulkan/tu_image.cc

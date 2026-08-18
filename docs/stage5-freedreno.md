@@ -516,3 +516,70 @@ systemui）→ 反证了 ANGLE 的 dynamic-rendering 用法确实是那个 NULL 
 已还原软渲染兜底可用态（`ro.hardware.vulkan=pastel`、`debug.hwui.renderer=skiagl`），
 **SMMU workaround 服务保留常驻**（对将来 turnip 复用是必需的，且 pastel 下
 GPU 不初始化时脚本读到 0 自动不动作，无副作用）。turnip 仍在 vendor 里。
+
+## D9. ★里程碑：Android + turnip 硬件 GPU 完整启动进桌面
+
+**2026-08-18 晚，`*** BOOT COMPLETED ***` at t=35s**：
+
+```
+renderer: freedreno      hwui: skiagl（原本必崩的 ANGLE 路径）
+Turnip Adreno (TM) 690   turnip 崩溃 = 0
+桌面进程：surfaceflinger + system_server + systemui + launcher3 全部存活
+```
+
+### 单一根因：patch 0004 v1 自己制造的 NULL
+
+`llvm-addr2line` 配 `symbols/` 下的未 strip 库（BuildId `fdd5d912…` 与设备端
+逐字节一致）把崩溃地址一次翻译到底：
+
+```
+0xa4e040 → tu_allocate_transient_attachments()  tu_cmd_buffer.cc:3955
+         → 内联进 tu_cmd_render_sysmem()        :4087
+         → 内联进 tu_cmd_render()               :4123
+```
+
+**3955 行就是 `!iview->image->mem->bo &&`** —— `image->mem` 是 NULL，
+读它的 `bo`（`offsetof` 正好 **0xd0**，与 tombstone 的 fault addr 完全吻合）。
+
+而 `image->mem` 为什么是 NULL？**patch 0004 v1 干的**：它在
+`BindImageMemory2(memory=NULL)` 时直接 `return VK_SUCCESS`，
+**从不给 `image->mem` 赋值**。于是同一个 NULL 制造了两个看似无关的灾难：
+
+| 层 | 表现 | 追查记录 |
+|---|---|---|
+| 用户态 | `tu_allocate_transient_attachments` 解引用 NULL → SIGSEGV → RenderThread 崩溃风暴 | D7 |
+| 内核态 | 该 image 的 `iova` 无效 → GPU 访问非法地址 → **SMMU translation fault** → 本平台 context-fault 中断不通 → 永久 stall → CP 断粮 → GMU 投票超时 → 看门狗 → 掉电失败 → 死循环 | D5/D6 |
+
+→ **D5–D8 追了两天的全部现象，归一到这一个 bug。**
+"GMU 必死"从来不是电源管理问题，而是一个空指针的下游放大。
+
+### 修复（patch 0004 v2，权威实现 `scripts/gmu-forensics/apply-0004v2.py`）
+
+1. `tu_image.cc`：NULL memory 时改用 `image->vk.anb_memory`
+   （vkCreateImage 时 `vk_android_import_anb()` 导入的真实内存）装进
+   `image->mem`；连它也没有才安全跳过（不再走 UB）。
+2. `tu_cmd_buffer.cc`：`iview->image->mem &&` 防御——没有内存自然不需惰性分配。
+
+编译 **1 分 31 秒**（`m vulkan.freedreno`），部署走 overlayfs `adb push`
+（**不刷 super**，`scripts/gmu-forensics/deploy-turnip.sh` 一键完成），
+顺带把 SELinux 标签从 `vendor_file` 改正为 `same_process_hal_file`
+（与 vulkan.pastel.so 对齐；此前 app 加载它一直有 avc denied）。
+
+### 残余问题（下一场）
+
+- **仍有少量 SMMU fault**：`smmustall` 打出 `FAR=0x100`、
+  `TTBR0=0x1_1C400000` —— 又是一个"iova 未设置 + 小偏移"的特征，说明还有
+  image 走了 v2 的"安全跳过"分支（既无 memory 也无 anb_memory）。
+  SMMU workaround 兜住了不死锁，但 GPU 会偶发 reset
+  （`screencap` 会卡、GMU 错误缓慢累积）。
+  → 下一场：在那个 else 分支加 `mesa_logw` 打印 image 属性
+  （`create_flags`/`usage`/`format`/是否 ANB），一轮编译即可定性。
+- 蓝牙仍在崩溃循环（已知 #30，无 HCI HAL，与 GPU 无关）。
+
+### 上游价值
+
+- `tu_image_bind` 的 ANB NULL-memory 处理（v2）是真 bug 修复，可提 mesa。
+- 「本平台不能用 stall-on-fault」（D6）：msm_iommu.c 的 `set_stall(true)`
+  在 context-fault 中断不通的平台上会把任何一次 fault 放大成整机死锁
+  → 条件禁用，可提上游。
+- `msm_submitqueue.c:201` 抢占判断语义反转（D4）→ 可提上游。
