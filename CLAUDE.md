@@ -51,14 +51,12 @@
 >     → `manifests/local_manifest_gaokun3.xml`。
 >   - ★**铃声缺口 crDroid 自带解决**（`vendor/lineage/audio/audio.mk` 装 44 个音频到
 >     `product/media/audio/`）。
->   - ★**解码器缺口的根因换了**：不是"`media_codecs.xml` 缺失"（#36 那句已更正）。
->     逐环实测：XML 两份都在、36 个软解码库在、C2 服务已注册、VINTF 片段
->     `vintf fm` 运行时列得出、AIDL 分支被选中 —— 断点是
->     `AServiceManager_forEachDeclaredInstance()` 返回空，即
->     **servicemanager 的 declared 集里没有它**（registered ≠ declared）。
->     主嫌疑：servicemanager 的 VintfObject 快照早于 apexd 就绪，而该声明带
->     `updatable-via-apex`。证据链见 `docs/stage6-crdroid.md`。
->     **不能承诺 crDroid 自动修好**；crDroid 一起来先量 `dumpsys media.player`。
+>   - ★**解码器缺口的最终结论（已解决）**：不是 `media_codecs.xml` 缺失，
+>     也不是"servicemanager 的 declared 集"问题（这两个归因都被推翻了）。
+>     真凶是 **`media.c2.hal.selection` 默认为 `hidl`**
+>     （`frameworks/av/media/codec2/hal/common/HalSelection.cpp:57`），
+>     而 HIDL Codec2 在 Android 15+ 已随 hwservicemanager 一起消失。
+>     设成 `aidl` 后解码器从 0 → 66。详见首屏的 M2 段与 `docs/stage6-crdroid.md`。
 >   - ★**mesa 管线一个都不能丢**：lineage-23.2 的 `external/mesa3d` 就是 AOSP 那份，
 >     `BOARD_MESA3D_*` 是平行项目自带 mesa 仓库的机制，不是 Lineage 的
 >     （作废 `docs/stage5-freedreno.md:212` 的猜测）。**但好消息（已实测）**：
