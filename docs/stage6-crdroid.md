@@ -359,3 +359,103 @@ product/media/audio/  = 92 通知音 + 130 铃声 + 45 闹铃 + 25 UI 音效
 
 ★ 最后一行意味着**换轨动机的一半（铃声/UI 音效）已经确凿解决**。
 另一半（解码器）等上机后 `dumpsys media.player` 判定。
+
+## M2：首次上机 —— crDroid 起来了，但 system_server 崩溃循环
+
+### 装机流程（已验证可复现）
+
+Ego 根在 U 盘（`/dev/sda2`），内置盘 super = `nvme0n1p8`，`/tmp` 是 7.5G tmpfs
+（内存 15G）—— 2.69G 的 super.img 直接下到内存盘，不占根分区那 4.1G。
+
+```bash
+# Ego 从构建机直传（Ego 有 VM 的 ssh 钥匙）
+scp vahiru@VM:~/crdroid/out/target/product/gaokun3/super.img /tmp/
+sha256sum /tmp/super-crdroid.img        # 与构建机逐字比对
+sudo simg2img /tmp/super-crdroid.img /dev/nvme0n1p8      # ⚠️ 必须 simg2img，不能 dd
+sudo mkfs.ext4 -F -L userdata /dev/disk/by-partlabel/userdata   # 换 ROM 必清
+sudo mkfs.ext4 -F -L metadata /dev/disk/by-partlabel/metadata
+sudo bootctl set-oneshot <machine-id>-crdroid.conf && sudo systemctl reboot
+```
+
+- crDroid 的 ramdisk 单独放成 `ramdisk-crdroid.img`，**不覆盖** AOSP 那份 ——
+  回退时老启动项原样可用。内核仍是 `Image-kb21`（两套 ROM 共用）。
+- **默认启动项保持 Ubuntu**，只用 oneshot 进 Android → 起不来拍电源键自动回落。
+- 写完读回 `/dev/nvme0n1p8` 偏移 4096 处应为 `67 44 6c 61`
+  （`LP_METADATA_GEOMETRY_MAGIC = 0x616c4467` 小端，
+  `system/core/fs_mgr/liblp/include/liblp/metadata_format.h:32`）。
+
+### ★ 属性系统的两条反直觉机制（花了很久才查清）
+
+**① `gen_build_prop.py` 里没有 userdebug 这一档**
+
+```python
+# build/soong/scripts/gen_build_prop.py:28
+def get_build_variant(product_config):
+  if product_config["Eng"]: return "eng"
+  else:                     return "user"
+```
+
+只要不是 `eng`，`/system/build.prop` 就按 **user** 分支硬写
+`ro.adb.secure=1` + `ro.debuggable=0` + `ro.allow.mock.location=0`，
+与 `TARGET_BUILD_VARIANT=userdebug` 无关。
+（判据：产物里这三条同时出现 = 走了 user 分支。）
+
+**② init 的属性加载是「后来者覆盖」，但 vendor 无权设 system 属主的属性**
+
+`property_service.cpp` 的 map 插入（807-815）是后覆盖前，加载顺序
+`/system` → `system_ext` → `vendor` → `odm` → `product`
+（注释原话：越贴近产品的分区优先级越高）。
+**但**每条都要过 `CheckPermissions(key, value, context, …)`，
+而 `/vendor` `/odm` `/vendor_dlkm` `/odm_dlkm` 用的是 **vendor context**
+（`LoadProperties` 里按路径前缀判定）——
+`ro.adb.secure` / `ro.debuggable` 是 system 属主的属性，**vendor 无权设置，静默拒绝**。
+
+> 这解释了一个从 Stage 2 起就存在、一直没被发现的问题：
+> `device.mk` 里 `PRODUCT_PROPERTY_OVERRIDES += ro.adb.secure=0 ro.debuggable=1`
+> 落进 `vendor/build.prop`，**从来没有生效过**。
+> AOSP 时代没暴露，是因为那棵树的 `/system/build.prop` 里本来就没有这两条。
+
+**正确渠道：`PRODUCT_SYSTEM_EXT_PROPERTIES`**（init context，且在 system 之后加载）
+
+```makefile
+WITH_ADB_INSECURE := true                       # crDroid 官方开关 → system_ext 的 ro.adb.secure=0
+PRODUCT_SYSTEM_EXT_PROPERTIES += ro.debuggable=1  # 我们自己补，M3 要 adb root/remount
+```
+⚠️ `WITH_ADB_INSECURE` 必须在 `inherit vendor/lineage/config/common_full_tablet_wifionly.mk`
+**之前**赋值（`common.mk:33` 是 `ifdef`，解析时求值）。
+
+### ★ 真正的阻塞：ClatCoordinator 让 system_server 崩溃循环
+
+首次开机停在开机动画，`/data/tombstones/` 里 **100 个** tombstone，全是 system_server：
+
+```
+#01 register_com_android_server_connectivity_ClatCoordinator()+716
+      /apex/com.android.tethering/lib64/libservice-connectivity.so
+#02 JNI_OnLoad
+#08 com.android.server.NetworkStatsServiceInitializer.<init>
+#17 com.android.server.SystemServer.startOtherServices     → SIGABRT
+```
+
+`register_...` 第一件事是 `verifyClatPerms()`
+（`packages/modules/Connectivity/service/jni/com_android_server_connectivity_ClatCoordinator.cpp:564`），
+它逐项核对：
+
+| 检查项 | 期望 |
+|---|---|
+| `/apex/com.android.tethering/bin/for-system` | dir 0750, clat:system, `u:object_r:system_file:s0` |
+| `…/for-system/clatd` | 06755, clat:clat, `u:object_r:clatd_exec:s0` |
+| `/sys/fs/bpf` | dir 01777, root:root, `u:object_r:fs_bpf:s0` |
+| `/sys/fs/bpf/net_shared` | dir 01777, root:root, `u:object_r:fs_bpf_net_shared:s0` |
+| `prog_clatd_schedcls_{egress4_clat_rawip,ingress6_clat_rawip,ingress6_clat_ether}` | 0440, PROG |
+| `map_clatd_clat_{egress4,ingress6}_map` | 0660, MAP_RW |
+
+任一不符 → `ALOGF`（只写 logcat，**不留 abort message**）→ `abort()`。
+`/data/misc/logd` 里没有持久化日志，dropbox 也没有 → **事后查不出是哪一项，必须拿运行时 logcat**。
+
+我们那棵最小 AOSP 从没走到这里（没带 tethering APEX），所以是换轨后的新问题。
+
+> ⚠️ **一个差点犯的错**：看到程序名 `prog_clatd_schedcls_*` 我第一反应是内核缺
+> `CONFIG_NET_CLS_BPF`（实测确实 not set）。但翻内核源码发现
+> `BPF_PROG_TYPE_SCHED_CLS` 在 `include/linux/bpf_types.h` 里只受 `#ifdef CONFIG_NET`
+> 保护 —— **加载**这类程序不需要 `NET_CLS_BPF`，那个选项管的是往 tc filter 上**挂载**。
+> 照那个假设去重编内核就是几十分钟白费。
