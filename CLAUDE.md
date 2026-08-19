@@ -5,7 +5,61 @@
 在华为 MateBook E Go（Snapdragon 8cx Gen 3 / sc8280xp，代号 gaokun）上跑原生 AOSP，
 最终目标是能稳定运行 arm64 手游。
 
-**当前阶段：Stage 6 — ★crDroid 16.0 + 硬件 turnip 全通（M3 完成），下一步 M4 硬件回归**（每次开工时更新这一行）
+**当前阶段：Stage 6 M4 — ★待机已判决为内核/EC 缺陷（Ubuntu 同样复现）；音频 tinymix 已补齐**（每次开工时更新这一行）
+
+> **★★ Stage 6 M4（2026-08-19 夜）：s2idle 定性 + 音频解锁。**
+>
+> ★**"不能待机"的判决：挂起成功、resume 失败、然后整机被复位 —— 而且在
+> Ubuntu 里用同一棵内核复现得一模一样。** 所以与 Android、与 SystemSuspend、
+> 与我们的设备树**全都无关**，是内核/EC 层面的缺陷，根治属上游活。
+> 证据：Ubuntu 侧 `echo mem > /sys/power/state` 后日志停在那一行，
+> 紧随的 "resume 成功" 标记从未写出，机器回来后 `uptime` 是全新启动。
+> RTC 闹钟**确实按时触发**，约 13 秒后才重启 → **坏在 resume，不在 suspend**。
+> - **三个元凶已排除**（各自卸掉再挂起，照样醒不来）：himax 触摸驱动、
+>   三个 remoteproc（ADSP/CDSP/SLPI）、★**EC 驱动本身**
+>   —— 最后这条**推翻了 CLAUDE.md 从 Stage 3 起的预言**（"EC 挂起/恢复会先炸"）。
+> - 那两个"本该修好它"的补丁**其实一直都在**（buildbot 无条件 `git am`
+>   `patches/upstream/*` 与 `patches/others/*`）：`upstream/0012`
+>   （EC 的 PM 回调 NOIRQ→SYSTEM_SLEEP，自述就是修 "resume fail silently"）、
+>   `others/0017`（EC 加 `device_init_wakeup`）。都在，照样挂 → **别再指望它们**。
+> - **没法继续二分**：内核没开 `CONFIG_PM_DEBUG`，`/sys/power/pm_test` 不存在
+>   （两侧都没有）；挂起瞬间的日志也拿不到（userspace 已冻结，journald 来不及落盘；
+>   clean hang 不产生 panic，efi_pstore 抓不到）。→ 真要修，第一步是编个带
+>   `CONFIG_PM_DEBUG` 的内核。
+> - **落地取舍**：wakelock **保留**（这是正确的工程决定，不是偷懒），
+>   加一条逃生口 `persist.gaokun3.allow_suspend=1` 供将来复测；
+>   但把 `svc power stayon true` 与 `screen_off_timeout=INT_MAX` **删掉** ——
+>   持 wakelock 时息屏是安全的。**于是本机的"待机" = 息屏但机器不真睡。**
+> - ⚠️**会浪费两小时的陷阱**：持有 wakelock 时读 `/sys/power/wakeup_count`
+>   会**永久阻塞**（实测 cat 挂死 120s）。Android 的 SystemSuspend 就卡在这一读上，
+>   这也解释了 `suspend_stats/success` 恒为 0。别在探测脚本里 cat 它。
+>
+> ★**远程救援闭环本轮实战验证成功**：Android 挂死 → 自动复位 → 默认启动项
+> Ubuntu → ssh 进去 → `bootctl set-oneshot ...crdroid.conf` → 回 Android。
+> **全程不需要有人在机器边。**"默认启动项永远留 Ubuntu"这条纪律兑现了价值。
+>
+> **音频**：`tinymix` 首次真的编进来了（M3 只是排了队）。硬件路径**实测通**：
+> 291 个混音器控件、路由回读正确（`>AIF1_PB`/`>RX0`/DAC on/BOOST off/PA=12）、
+> `tinyplay` 让 `/proc/asound/card0/pcm1p/sub0/status` 变成 **`state: RUNNING`**
+> 且 DMA 实时消耗。⚠️ 但**框架路径仍未证实**（`Total writes: 0`）——
+> 而且这个 ROM 里**没有任何应用能处理音频**，我试过的每种无头触发都没能让
+> AudioTrack 起来，所以是"未测"而非"坏"。装个播放器放首歌即可定论。
+> ⚠️ `tinymix` 动态链接 `libtinyalsa.so`，放 `/vendor/bin/` 时那个 .so
+> 必须一起进 `/vendor/lib64/`（vendor 命名空间搜不到 system 的那份）。
+>
+> **蓝牙：撤销 #30**。实测 `state: ON`、地址读出、`crashed 0 times`。
+> `android-post-flash.sh` 里的禁用两行已删（留着会在每次重刷 userdata 后
+> 把好的蓝牙重新关掉）。
+>
+> **搁置并说明理由**：传感器（**DTS 里根本没有加速度计/磁力计/光感节点**，
+> 与相机同类；连带没有自动旋转与自动亮度，但**游戏不受影响**）、
+> Venus 硬解、UCSI、SELinux 转 enforcing。
+> ⚠️**记一条将来的地雷**：热管理 HAL 是 AOSP mock，它报的 skin/battery
+> **SHUTDOWN 阈值只有 36.0 °C**，而 `ThermalManagerService.shutdownIfNeeded()`
+> 到 SHUTDOWN 会直接 `powerManager.shutdown()`。现在因 mock 值恒定打不到，
+> **将来换成读 `/sys/class/thermal` 的真 HAL 时必须同时改阈值**，
+> 否则开机几分钟就自动关机。
+> 详见 `docs/stage6-crdroid.md` 的 M4 段。
 
 > **★★ Stage 6 M3 已于 2026-08-19 完成：Android 跑在 Adreno 690 硬件 Vulkan 上。**
 > `Turnip Adreno (TM) 690`、`boot_completed` t+48s、锁屏/桌面渲染正常
@@ -23,7 +77,7 @@
 >    从未提交**的，所以两棵树必然显示同一个 commit。实际是
 >    25.3.0-devel vs **26.0.3**，`git diff` 3791 个文件。
 >    判"两棵源码树是否相同"，`git status --porcelain | wc -l` 才是那一句。
-> 2. ★"s2idle 没修好" —— **一直是好的**。`/sys/power/wake_lock` 是
+> 2. ★"s2idle 的 **wakelock 挡不住**" —— 挡是一直挡住了（⚠ 别把这条读成 "s2idle 是好的"；M4 已证明 **resume 确实坏**）。`/sys/power/wake_lock` 是
 >    `radio:wakelock` 0660，shell 连读都读不了，我把 `cat` 的
 >    "Permission denied" 当成了"内容为空"。实测 26 分钟 `suspend entry` = 0。
 > 3. ★"`adb root` 不生效" —— **两步可解**：
@@ -263,7 +317,7 @@ Android 相关知识。因此：
 | 存储 | NVMe（**不是 UFS**，不是手机那套分区布局） |
 | 引导 | **UEFI，不是 fastboot**。可关 Secure Boot。GRUB/systemd-boot 加载 |
 | 虚拟化 | KVM/EL2 可用 |
-| 已知不支持 | 指纹（FocalTech FTE7001）、TPM。休眠是**未测试**，不是不支持 |
+| 已知不支持 | 指纹（FocalTech FTE7001）、TPM。**s2idle 已实测：挂得下去、醒不回来、约 20–40s 后整机复位；Ubuntu 同样复现 → 内核/EC 缺陷**（M4 定性）。深度休眠(S4)仍未测 |
 
 ## 关键约束（每次都要记住）
 

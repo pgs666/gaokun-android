@@ -14,6 +14,17 @@
 # ⚠️ 左功放（sdw:1:...:1）会卡在 Alert 状态刷 "Bus clash detected"，
 #    右功放正常；出声不受影响，但这是个待查项（docs/stage5-audio.md）。
 
+# ⚠️ 必须把 PATH 钉在 /system/bin —— 与 smmu-nostall.sh 同一个坑。
+# 本脚本以 `#!/vendor/bin/sh` 起，PATH 默认优先 /vendor/bin，于是 log/sleep 每次都去
+# exec /vendor/bin/toybox_vendor；而服务跑在 u:r:shell:s0 域，对 vendor_toolbox_exec
+# 没有权限 —— permissive 下功能照常，但每次调用都吐 4 行 avc denied。
+# 2026-08-19 M4 实机日志实录：
+#   avc: denied { getattr / execute / read open / execute_no_trans }
+#   for path="/vendor/bin/toybox_vendor" scontext=u:r:shell:s0
+#   tcontext=u:object_r:vendor_toolbox_exec:s0
+PATH=/system/bin:/system/xbin
+export PATH
+
 M=/system/bin/tinymix
 [ -x $M ] || M=/vendor/bin/tinymix
 [ -x $M ] || { log -t audioroute "找不到 tinymix，放弃"; exit 1; }

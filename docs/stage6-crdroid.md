@@ -1029,3 +1029,156 @@ CPU 8 核，cpu7 scaling_max_freq 2688000
   丢掉 100ms 轮询脚本。
 - `ro.build.type=user`（构建的是 userdebug）未查清。
 - 蓝牙：HAL 装着但被 `android-post-flash.sh` 禁用，crDroid 上一次没测过（手柄要用）。
+
+---
+
+# M4 —— 待机定性 + 音频解锁（2026-08-19 下午/夜）
+
+用户本轮指定：先修"不能待机"与"按电源键直接关机"，然后按"影响游戏和日用体验"
+排序解决其余问题，相机搁置。范围：先做零构建的，需要重编的攒成一次 ROM 构建。
+
+## 0. 「按电源键直接关机」—— 无法复现，撤单
+
+用户复测后回答"正常了"。旁证：`persist.sys.boot.reason.history` 里只有
+`reboot,shell` / `reboot,ota`（全是我自己的重启），**没有任何 `shutdown,*` 记录**
+—— 说明当时那次关机没有走框架的有序关机路径。最可能是 M3 期间那次
+**引导错内核**（`android.conf` = Image-kb18）造成的连带现象。不再排查。
+
+## 1. ★s2idle 的判决：内核/EC 缺陷，与 Android 无关
+
+### 结论
+**挂起成功，resume 失败，然后整机被复位。** 在 **Ubuntu 里用同一棵内核复现，
+现象一模一样** —— 所以与 Android、与 SystemSuspend、与我们的设备树全都无关。
+
+### 判决性实验
+Ubuntu 侧直接 `echo mem > /sys/power/state`（脚本 `/home/user/susp2.sh`）：
+
+```
+--- suspend @ 2026-08-19T07:19:42+00:00      ← 日志停在这里
+                                              ← "★ 走到这一行就说明 resume 成功了" 从未写出
+```
+机器回来后 `uptime` 显示是**全新启动**，不是 resume。
+
+### 时序（refine 出"坏在 resume 而不是 suspend"）
+RTC 闹钟 +45s → 闹钟**确实按时触发** → 约 **13 秒后**机器开始重启。
+13 秒这个数量级像是 resume 路径卡住后被看门狗咬掉。
+（Android 侧那一次是 +90s 闹钟但约 40s 就复位了，未深究差异。）
+
+### 已排除的元凶（每个都是"卸掉它再挂起"，结果照样醒不来）
+| 实验 | 做法 | 结果 |
+|---|---|---|
+| T1 himax 触摸 | `echo spi0.0 > /sys/bus/spi/drivers/himax-spi/unbind` | ✗ 照样挂 |
+| T2 三个 remoteproc | ADSP/CDSP/SLPI 全 `stop` → offline | ✗ 照样挂 |
+| T3 **EC 驱动** | `echo 15-0038 > /sys/bus/i2c/drivers/gaokun-ec/unbind` | ✗ 照样挂 |
+
+> ★ T3 **推翻了 CLAUDE.md 从 Stage 3 起的预言**（"EC 挂起/恢复会先炸"）：
+> EC 驱动整个卸掉，s2idle 依然醒不来。EC 驱动不是元凶。
+
+### 两个"本该已经修好"的补丁其实都在（所以别再指望它们）
+buildbot 的 `scripts/ci/20_build_kernel_variants.sh:65-66` 无条件 `git am`
+`patches/upstream/*` 和 `patches/others/*`，因此现役 kb23 内核**已经带着**：
+- `upstream/0012-...-fix-suspend-resume`：EC 的 PM 回调 `NOIRQ_SYSTEM_SLEEP_PM_OPS`
+  → `SYSTEM_SLEEP_PM_OPS`（补丁自述就是修 "resume to fail silently"）
+- `others/0017-...-set-wakeup-source-properly`：EC 的 i2c client 加
+  `device_init_wakeup(dev, true)`。实机佐证：`/sys/class/wakeup/` 里有 `15-0038`。
+
+两个都在，s2idle 照样挂。→ **根治是上游内核活，不在本项目范围内。**
+
+### 为什么没法继续二分下去
+- **`/sys/power/pm_test` 不存在**（内核没开 `CONFIG_PM_DEBUG`）——
+  Ubuntu 和 Android 两侧都没有。想分层二分必须先重编内核。
+- **拿不到挂起瞬间的日志**：userspace 已冻结，journald 来不及落盘；
+  clean hang 不产生 panic，`efi_pstore` 也抓不到（实测当日 pstore 无新记录）。
+→ 下一轮如果要真修，第一步是编一个带 `CONFIG_PM_DEBUG` 的内核。
+
+### ★远程救援闭环（本轮意外验证成功，很重要）
+Android 挂死 → 约 20–40s 后自动复位 → **默认启动项是 Ubuntu** → Ubuntu 起来 →
+`ssh user@192.168.31.230` → `bootctl set-oneshot ...crdroid.conf` → reboot 回 Android。
+**全程无需有人在机器边。** 这就是"默认启动项永远留 Ubuntu"这条纪律的价值兑现。
+
+## 2. 挡住挂起的三层，与新的落地方式
+
+| 层 | 位置 | 原值 |
+|---|---|---|
+| 内核 wakelock | `init.gaokun3.rc` | 按住 |
+| 插电常亮 | `android-post-flash.sh` 的 `svc power stayon true` | `stay_on_while_plugged_in=15` |
+| 息屏超时 | Settings.System | `screen_off_timeout=2147483647`（INT_MAX） |
+
+既然 s2idle 是内核缺陷，**wakelock 就该留着**（这是正确的工程取舍，不是偷懒）。
+改成"默认挡住 + 一条属性放开"，见 `init.gaokun3.rc`：
+```
+on init
+    write /sys/power/wake_lock gaokun3_nosuspend
+on property:persist.gaokun3.allow_suspend=1
+    write /sys/power/wake_unlock gaokun3_nosuspend
+```
+但**后两层删掉**：持 wakelock 时息屏是安全的（不会触发挂起），所以给它一个正常的
+息屏超时，用户就能得到"按电源键息屏 / 再按点亮"的正常体验。
+**这就是本机目前能提供的"待机"：息屏，但机器不真睡。**
+
+### ⚠️ 一条会浪费两小时的陷阱
+**持有 wakelock 时读 `/sys/power/wakeup_count` 会永久阻塞**（实测 `cat` 挂死 120s）。
+Android 的 `SystemSuspend` 正是卡在这一读上 —— 这也解释了为什么
+`/sys/power/suspend_stats/success` 恒为 0（它连一次挂起都没发起过）。
+**别在探测脚本里 cat 这个节点。**
+
+## 3. 音频：tinymix 补齐，硬件路径实测通
+
+`audio-route.sh:19` 因为找不到 `tinymix` 直接 `exit 1` —— 这就是 M3 留下的
+"声卡在、服务跑了、但混音器一个控件都没设"。本轮编出来补上（`m tinymix
+tinyplay tinycap tinypcminfo`，`S1_RC=0`，51 KB 一个）。
+
+⚠️ `tinymix` 动态链接 **`libtinyalsa.so`**。放到 `/vendor/bin/` 时，
+`libtinyalsa.so` 必须一起进 `/vendor/lib64/`（vendor 命名空间搜不到 system 的那份；
+libc/libm/libdl/libc++ 是 LLNDK，不用管）。
+
+实测证据链：
+- `tinymix` 跑通：`Mixer name: 'SC8280XP-HUAWEI-GAOKUN3'`，**291 个控件**
+- 路由生效（回读硬证据）：`WSA RX0 MUX = >AIF1_PB`、`WSA_RX0 INP0 = >RX0`、
+  `SpkrLeft/Right DAC Switch: On`、`BOOST Switch: Off`、`PA Volume: 12`
+- **PCM 真的在跑**：`tinyplay tone.wav -D 0 -d 1` → rc=0，
+  `/proc/asound/card0/pcm1p/sub0/status` = **`state: RUNNING`**，
+  `delay: 5760`（= 48 kHz 下 120 ms 在途），`tstamp` 实时推进
+- 策略配置正确：`primary_audio_policy_configuration.xml` 的
+  `Speaker address="CARD_0_DEV_1"`，与出声的 `-D 0 -d 1` 一致
+- AudioFlinger 输出线程正确：48000 Hz / 2 ch / `AUDIO_DEVICE_OUT_SPEAKER` / 未静音
+
+⚠️ **框架路径仍未证实**（诚实记账）：`Total writes: 0`，`pcm=closed`。
+但这**不是**"框架坏了"的证据 —— 我试过的每种无头触发（`input tap`、音量键、
+`cmd notification post`、`SET_TIMER`）都**没能让任何 AudioTrack 起来**
+（logcat 里 `AudioTrack`/`AHAL` 一条都没有）。而且：
+**这个 ROM 里没有任何应用能处理音频**
+（`pm query-activities -a VIEW -t audio/ogg` 为空）。
+→ 结论是"未测"，不是"坏"。装个播放器放一首歌，几秒就能定论。
+
+## 4. 蓝牙：#30 撤销
+
+实测 `state: ON`、地址从芯片读出、`Bluetooth crashed 0 times`、
+`init.svc.vendor.bluetooth-default: running`。
+`android-post-flash.sh` 里那两行禁用（`settings put global bluetooth_on 0` +
+`svc bluetooth disable`）**已删除** —— 留着会在每次重刷 userdata 后
+把好的蓝牙重新关掉。（手柄可用性待用户实测。）
+
+## 5. 其他实测清单（影响游戏/日用，按可行性排序）
+
+| 项 | 实测 | 判断 |
+|---|---|---|
+| 屏幕 | 面板有 **120 Hz** 模式且当前 active；但 render 被钉 60（`defaultPeakRefreshRate: 0`，`peak_refresh_rate`=null）。另有 `ro.surface_flinger.game_default_frame_rate_override=60` **把游戏默认锁 60** | 可调，但 120 Hz 会加重带宽，宜做成可切 |
+| 传感器 | `No Sensors on the device`（`devInitCheck -19`）；无 sensor HAL；**DTS 里没有任何加速度计/磁力计/光感节点**；`iio:device0` 只是 PMIC ADC 温度通道 | 内核层就缺，与相机同类 → 搁置。**连带没有自动旋转/自动亮度**。游戏不受影响（应用自请求方向在 `USER_ROTATION_LOCKED` 下照样生效） |
+| 热管理 | 内核 15 个 zone + 4 个 cooling device 在跑；框架侧是 **AOSP mock HAL**（温度 30.1/30.2 三秒不变） | ★**将来的地雷**：mock 报的 skin/battery **SHUTDOWN 阈值是 36.0 °C**（`mHotThrottlingThresholds=[30..36]`），而 `ThermalManagerService.shutdownIfNeeded()` 对 SKIN/BATTERY 到 SHUTDOWN 会直接 `powerManager.shutdown()`。现在因 mock 值恒定打不到；**一旦换成读 `/sys/class/thermal` 的真 HAL，必须同时改阈值，否则开机几分钟就自动关机** |
+| CPU/GPU | `schedutil`，policy0 max 2.44 GHz / policy4 max 2.69 GHz；GPU 270→690 MHz 八档 `simple_ondemand` | 正常 |
+| 内存/存储 | **15.7 GB RAM**、`/data` 62 GB（61 GB 空）、无 zram | 跑手游余量充足 |
+| GPU 带宽票 | 空闲实测 `3d00000.gpu 0 0 0` | **不是 bug**：DTS 里 GPU 有 `interconnects = <&gem_noc MASTER_GFX3D 0 &mc_virt SLAVE_EBI1 0>` 与 451000→2736000 kBps 的 `opp-peak-kBps`；空闲掉电时票归零属正常。**必须在负载下重测** |
+| CPU→DDR 带宽 | `/sys/class/devfreq/` 只有 `3d00000.gpu`；CPU 只有 `epss_l3` 的票 | `patch sets/freq_scaling/` 那两个 DTS 补丁（CPU→LLCC→DDR）**没应用**，且上游未合（作者 readme 自称 "tried to add"）→ 下一轮，先测量取证 |
+| 应用生态 | 这个 ROM 几乎是裸的：无播放器、无浏览器、无 GMS | 用户要自己 sideload（跑手游本来也是这样） |
+| 背光 | `/sys/class/backlight/ae96000.dsi.0` 512/4095 可调 | 正常 |
+
+## 6. 本轮改了什么
+
+| 文件 | 改动 |
+|---|---|
+| `device/huawei/gaokun3/init.gaokun3.rc` | wakelock 默认保留 + `persist.gaokun3.allow_suspend` 逃生口；注释换成 M4 的判决性证据 |
+| `device/huawei/gaokun3/bin/audio-route.sh` | 钉 `PATH=/system/bin`（与 smmu-nostall.sh 同一个坑，实测 AVC 打在 `/vendor/bin/toybox_vendor`） |
+| `scripts/android-post-flash.sh` | 删 `svc power stayon true`；删蓝牙禁用两行；加 `screen_off_timeout=120000` 与 `service.adb.tcp.port` |
+| `device/huawei/gaokun3/device.mk` | （M3 已排队）`tinymix/tinyplay/tinycap/tinypcminfo` 本轮首次真的编出来 |
+
