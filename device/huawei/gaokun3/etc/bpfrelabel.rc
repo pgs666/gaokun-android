@@ -1,0 +1,13 @@
+# 在 bpfloader 之后、zygote 之前修正 /sys/fs/bpf 的 SELinux 标签。
+# 原因与时序依据见 bin/bpf-relabel.sh 的注释。
+service bpfrelabel /vendor/bin/bpf-relabel.sh
+    user root
+    group root
+    seclabel u:r:vendor_init:s0
+    oneshot
+    disabled
+
+# init.rc:582 —— 这个触发器在 bpfloader 完成后、start zygote 之前触发。
+# 用 exec_start（同步）而不是 start，确保 system_server 起来时标签已经对了。
+on bpf-progs-loaded
+    exec_start bpfrelabel
