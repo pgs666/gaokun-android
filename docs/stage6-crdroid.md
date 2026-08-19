@@ -962,3 +962,70 @@ WifiHalAidlImpl: Initialization is complete   （AIDL v3）
   （`cmd wifi connect-network <ssid> wpa2 <密码>` 或设置里点一下）。
 
 所以这一步需要密码，留给 M4 / 用户操作。硬件侧没有任何问题。
+
+### M3 收尾补测：GLES 链路 / 触摸 / GPU 频率（都不用开构建机）
+
+**GLES 全链路已经落在硬件上**（`dumpsys SurfaceFlinger`）：
+
+```
+EGL implementation : 1.5 Android META-EGL
+GLES: Google Inc. (Qualcomm),
+      ANGLE (Qualcomm, Vulkan 1.3.335 (Turnip Adreno (TM) 690 (0x06090000)),
+             turnip Mesa driver-512.0.0),
+      OpenGL ES 3.2.0
+```
+
+扩展里有 `GL_KHR_texture_compression_astc_ldr/hdr`、ETC2/EAC 全套、
+`GL_EXT_texture_compression_s3tc_srgb`、`bptc`、`rgtc` —— **手游要的纹理格式一个不缺**。
+`vulkan_renderengine: false`（SF 的 RenderEngine 仍走 GL，即 ANGLE→turnip，正常）。
+
+> 意义：到这一步，"能不能跑手游"已经**不再是图形栈的问题**。
+> 剩下的是输入、音频、装包渠道和实测帧率。
+
+**触摸（远程能验的部分全绿）**：
+
+```
+dumpsys input   Classes: TOUCH | TOUCH_MT | LIGHT   Enabled: true
+                InputReader Device 6 ← /dev/input/event7
+/proc/interrupts  292: 248043 … msmgpio 175 Level  himax-spi-ts
+3 秒 IRQ 增量 362 → 稳定 ~121 Hz
+```
+
+按 `docs/stage4-findings.md` #26 的状态指纹判据：**非零且规整 = IC 在跑、
+gpio174 的 SPI 模式正确**（0 = IC 停摆；乱 = 模式错乱）。
+只剩"手指实际划一下"需要人在机器前。
+
+**GPU 频率能力**：
+
+```
+/sys/class/devfreq/3d00000.gpu
+  available  270 410 500 547 606 640 655 690 MHz     governor simple_ondemand
+  trans_stat 已跑上 547MHz（763 次）与 690MHz（23 次）→ DVFS 在动，能到满频
+CPU 8 核，cpu7 scaling_max_freq 2688000
+```
+
+### 距离项目目标（稳定跑 arm64 手游）还差什么
+
+| 优先级 | 缺口 | 需要什么 |
+|---|---|---|
+| 1 | **从没跑过任何 3D 应用** | GLES 3.2 是"报出来的能力"，不是实测。要一个 APK（本机无网、无 Play 商店 → 只能 host 侧 `adb install`） |
+| 2 | **音频断** | `tinymix` 已补进 device.mk，等一次构建+刷机 |
+| 3 | **触摸手感** | 需要人在机器前划一下 |
+| 4 | **无网 + 无 GMS** | WiFi 解禁要密码；`pm list packages` 305 个里没有 Vending/GMS，依赖 GMS 的游戏跑不了 |
+
+**性能上还留在桌面的钱（都没测过）**
+- `vendor.minigbm.debug=nocompression` 还开着 —— 这是 swangle 时代为软渲染加的。
+  现在 GPU 认 UBWC，关掉能省一大块显存带宽；`patches/0004` v3 会按 gralloc
+  真实 modifier 重算布局，理论上支持，但**没验证过**。
+- `debug.hwui.renderer=skiagl`（GL→ANGLE→Vulkan）vs `skiavk`（直接 Vulkan），
+  少一层翻译可能更快。
+
+**工程债**
+- ⚠️ `smmu-nostall.sh` 的 PATH 修复目前**只活在设备 overlayfs 上**，还没进镜像 ——
+  又是同一类问题，下次构建补齐前必须记着。
+- SELinux 一直 permissive；无 recovery / 无 OTA；构建不是一键可复现
+  （要手工跑 glslang-host-tool.py + mesa-relocate-abs-paths.py + 铺 mesa 归档）。
+- DTB 的 gpu_smmu 中断号根治（SPI 675/680 vs 声明的 678/679）—— 改了就能
+  丢掉 100ms 轮询脚本。
+- `ro.build.type=user`（构建的是 userdebug）未查清。
+- 蓝牙：HAL 装着但被 `android-post-flash.sh` 禁用，crDroid 上一次没测过（手柄要用）。
