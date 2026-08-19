@@ -24,11 +24,16 @@ PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/ueventd.gaokun3.rc:$(TARGET_COPY_OUT_VENDOR)/etc/ueventd.rc
 
 # ------------------------------------------------------------------ 属性
-# adb 默认开，且不要求授权 —— Stage 2 的验收就是 adb 能连上
+# adb 默认开，且不要求授权 —— Stage 2 的验收就是 adb 能连上。
+# persist.adb.tcp.port=5555：首次开机就把 adb over TCP 打开，
+#   免得换 ROM 后 USB 侧不通就彻底失联（本机 UCSI 拔插会丢 adb，见坑 #27）。
+#   属性名实名核实：packages/modules/adb/daemon/main.cpp:272-274
+#   先读 service.adb.tcp.port，回落 persist.adb.tcp.port。
 PRODUCT_PROPERTY_OVERRIDES += \
     ro.adb.secure=0 \
     ro.debuggable=1 \
-    persist.sys.usb.config=adb
+    persist.sys.usb.config=adb \
+    persist.adb.tcp.port=5555
 
 # 屏幕密度
 # [measured] 1600x2560，物理 266x166 mm -> 对角 12.34"，约 245 dpi
@@ -226,6 +231,29 @@ PRODUCT_SOONG_NAMESPACES += device/generic/goldfish
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/wifi/wpa_supplicant.conf:$(TARGET_COPY_OUT_VENDOR)/etc/wifi/wpa_supplicant.conf
 
+# ─── Stage 4: 蓝牙（WCN6855 / hci_qca，AOSP 原装 HAL 直接可用）───
+# ⚠️ 2026-08-19 发现：#34 记了"把这个 HAL 推进 vendor 即可"，但那句话
+#    从没变成一行构建配置 —— Stage 4 是走 adb remount 的 overlay 推的。
+#    这是本轮第三个同类漏网（前两个：拓扑固件名、audio-route.sh）。
+#
+# 为什么原装 HAL 就够（无需改一行代码）：
+#   hardware/interfaces/bluetooth/aidl/default/BluetoothHci.cpp:172
+#   先试 NetBluetoothMgmt::openHci()（BT 管理 socket + HCI_CHANNEL_USER），
+#   失败才退回串口路径 —— 正好对上主线内核的 hci0。
+# 模块自带 init_rc 与 vintf_fragments；android.hardware.bluetooth-V1-ndk
+# 是它的 shared_libs，会自动随包安装（当初 overlay 手推才要单独补那个 .so，
+#   少了它是 CANNOT LINK EXECUTABLE 的 5 秒重启循环）。
+#
+# ⚠️ 蓝牙能不能真的起来还取决于内核：CONFIG_RT_GROUP_SCHED 必须为 n，
+#    否则 bt_main_thread 拿不到 SCHED_FIFO → bluetooth::log::fatal。
+#    kb21 已经关掉，scripts/kernel-config-android.sh 里有断言守着。
+PRODUCT_PACKAGES += \
+    android.hardware.bluetooth-service.default
+
+PRODUCT_COPY_FILES += \
+    frameworks/native/data/etc/android.hardware.bluetooth.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.bluetooth.xml \
+    frameworks/native/data/etc/android.hardware.bluetooth_le.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.bluetooth_le.xml
+
 # ─── Stage 4/5: 固件双路安装 ───
 # 新增固件（从本机 Ubuntu /lib/firmware 提取，华为专有，不入版本库）：
 #   qcdxkmsuc8280.mbn   GPU zap shader（freedreno 必需，缺则 GPU 锁在安全模式）
@@ -292,3 +320,13 @@ PRODUCT_VENDOR_PROPERTIES += \
 # turnip 调试旗标加载器（快速迭代机制，见 docs/stage5-freedreno.md）
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/bin/tu_debug_loader.sh:$(TARGET_COPY_OUT_VENDOR)/bin/tu_debug_loader.sh
+
+# ─── Stage 4 的音频路由（Android 没有 ALSA UCM，混音器要自己摆）───
+# ⚠️ 2026-08-19 发现：这两个文件在 Stage 4 时【只通过 adb remount 的 overlay】
+#    进过设备，从没写进构建配置 —— 和 SC8280XP-HUAWEI-GAOKUN3-tplg.bin
+#    是完全同一类漏网。照原样构建 crDroid 会变成「声卡注册了但没人配路由」，
+#    症状是能播放却没有声音，而且本机没有串口，只能靠 logcat 猜。
+# 路由序列的来历、BOOST 关闭与 PA=12 的取值理由见 bin/audio-route.sh 的注释。
+PRODUCT_COPY_FILES += \
+    $(LOCAL_PATH)/bin/audio-route.sh:$(TARGET_COPY_OUT_VENDOR)/bin/audio-route.sh \
+    $(LOCAL_PATH)/etc/audioroute.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/audioroute.rc
