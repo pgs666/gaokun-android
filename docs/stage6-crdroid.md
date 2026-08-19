@@ -1361,9 +1361,23 @@ kill 后 trap 生效：cur_state 归 0，两个 policy 频率全部恢复
    ```
    原神（Unity → AAudio）优选 **MMAP 独占低延迟**流。策略配置里声明了
    `mmap_no_irq_out`（`AUDIO_OUTPUT_FLAG_MMAP_NOIRQ`），于是 AAudio 就用了。
-   但本机是 **AOSP 示例 HAL + 主线 audioreach、没有 DSP offload**，
-   再叠加游戏把 8 个核占满 —— 10 ms 周期根本喂不住 → XRUN。
    而音乐播放器走普通 AudioTrack 路径、4096 帧 / 85 ms，所以一直好的。
+
+   ⚠️ **归因修正（2026-08-20 当晚实测推翻）**：我最初写的是"10 ms 周期喂不住"。
+   **错的。** 事后用 `tinyplay -p/-n` 扫缓冲下限，**空载下从 341 ms 一路扫到
+   10 ms（240 帧 x 2），XRUN 全部为 0**：
+   ```
+   period=4096x4 = 341 ms  XRUN=0      period=512x4 = 42 ms  XRUN=0
+   period=2048x4 = 170 ms  XRUN=0      period=480x2 = 20 ms  XRUN=0
+   period=1024x4 =  85 ms  XRUN=0      period=240x2 = 10 ms  XRUN=0
+   ```
+   → **硬件和 ALSA 写入路径完全撑得住 10 ms，缓冲大小不是限制。**
+   真正的结论应该是：**MMAP no-irq 这套机制本身**在这套
+   AOSP 示例 HAL + 主线 audioreach 上不可用（它让应用直接写 DMA 缓冲、
+   不靠中断，与 tinyplay 走的普通 `write()` 路径是两条完全不同的实现）。
+   同样 10 ms 缓冲下 write 路径零 XRUN、MMAP 路径反复 XRUN，
+   差异只能归给机制而不是缓冲。
+   **删掉 MMAP 这个修法是对的，但当初写的理由是错的。**
    > 附带发现：策略里**没有** `AUDIO_OUTPUT_FLAG_FAST`，所以 `No FastMixer`。
    > 低延迟请求只有 MMAP 一条路可走，没有中间档。
 
@@ -1386,3 +1400,38 @@ MMAP_PLAYBACK 线程数    4 → 0
 tinyplay -D 0 -d 1      pcm state: RUNNING   ← 硬件路径完好
 ```
 ⚠️ **游戏侧效果待实机确认**（需要重启游戏让它重新开流）。
+
+### 11bis. 删掉 MMAP 之后：残留的卡顿是应用侧（2026-08-20）
+
+用户反馈：有声音了，但"一卡一卡的，像网络不畅"。继续排查，**逐条排除**：
+
+| 嫌疑 | 实测 | 结论 |
+|---|---|---|
+| 我刚上的 thermal-guard 在限频 | `cooling_device0/1 cur_state=0`，两个 policy 都是满频，47 °C，日志"限制 0%" | ❌ 不是（**先自查自己的改动，这条必须第一个排除**）|
+| LineageOS AudioFX 在处理音轨 | `dumpsys media.audio_flinger` → **`0 Effect Chains`** | ❌ 不是 |
+| 混音器→HAL 欠载 | `Normal mixer raw underrun counters: partial=0 empty=0` | ❌ 我们这侧干净 |
+| 我们的栈撑不住连续播放 | 连播 30 秒：**XRUN 命中 0 次**，全程 RUNNING | ❌ 栈是好的 |
+| cpuset 把游戏挤到小核 | 所有 cpuset 都是 `cpus=[0-7]` | ❌ 不是（但见下方"顺带发现"）|
+| 游戏崩了 | `am_proc_died` adj=905 / `cch CEM`，无当日 tombstone，内存 13 GB 无压力 | ❌ 是正常退出 |
+| ★**游戏喂不上它自己的 AudioTrack** | 游戏轨道的 `Underruns` 列 = 4352 / 14528 / 31872 | ✅ **应用侧欠载** |
+
+**当前结论**：MMAP 修掉之后，HAL/PCM 这一侧已经不欠载了；残留的卡顿是
+**游戏的音频线程喂不上自己的轨道**。
+
+⚠️ **待定，不要当成已知**：还没拿到"正在卡的时候"的现场采样
+（上面那些 `Underruns` 取自轨道**历史记录**，且游戏当时已切后台）。
+采样器已就位：`/data/local/tmp/audiodiag.sh`（30 秒，含游戏音频线程的
+policy/nice、pcm 状态、混音器欠载、活动轨道 Underruns、loadavg、CPU 频率）。
+
+**顺带发现（真实但影响有限）**：所有 cpuset 都是 `cpus=[0-7]`，
+包括 `background` —— 真机通常把 background 限制在小核。我们的设备树没设。
+8cx Gen 3 两簇只差 2.44 vs 2.69 GHz，所以收益有限，但后台任务确实能和游戏抢同样的核。
+
+**下一步的两个候选修法（等现场数据再定）**：
+1. 若确认是应用音频线程被饿死 → 提供 **FAST 输出**（应用拿到 fast track 时，
+   框架会通过 `requestPriority` 给它的音频线程 RT 优先级）。
+   可行性已被上面的缓冲扫描证明：**硬件能跑 10 ms**，所以 FAST 不是空中楼阁。
+   ⚠️ 但 AudioFlinger 只在 HAL 缓冲 < 约 20 ms 时才建 FastMixer，
+   现在是 4096 帧 / 85 ms → 光加 flag 不够，还要让 HAL 给出小缓冲。
+2. 若确认是我们的 HAL writer 被饿死 → 把它提到 `SCHED_FIFO`
+   （现在是 `SCHED_OTHER nice=-19`）。
