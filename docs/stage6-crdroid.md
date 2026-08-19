@@ -1435,3 +1435,87 @@ policy/nice、pcm 状态、混音器欠载、活动轨道 Underruns、loadavg、
    现在是 4096 帧 / 85 ms → 光加 flag 不够，还要让 HAL 给出小缓冲。
 2. 若确认是我们的 HAL writer 被饿死 → 把它提到 `SCHED_FIFO`
    （现在是 `SCHED_OTHER nice=-19`）。
+
+## 12. ★★真凶：tinyalsa 用"申请值"而不是"协商值"算 sw_params（2026-08-20）
+
+用户反馈"有声音了但一卡一卡的，像网络不畅"。这一条是整个音频问题的**真正根因**，
+前面 §11 删 MMAP 只是把"完全没声"变成了"有声但卡"。
+
+### 现场数据
+```
+period_size:      1440          ← 内核实际给的
+buffer_size:      5760          ← = 4 x 1440
+avail_min:        1024
+start_threshold:  2048
+stop_threshold:   4096          ← ★ 比 buffer_size 小！
+```
+ALSA 的规则是 **`avail >= stop_threshold` 就判 XRUN 并停流**。这里
+`stop_threshold` 只有 4096 而缓冲是 5760 → **缓冲里还剩 5760-4096 = 1664 帧
+（35 ms）音频就被判欠载**。实测波形与这条规则逐点吻合：
+```
+avail 4543 >= 4096  → XRUN     ✓
+avail 3103 <  4096  → RUNNING  ✓
+（每 200 ms 采样，约一半的点在 XRUN）
+```
+而 `1024 / 2048 / 4096` 全是 1024 的整数倍 —— 正是"申请 period_size=1024,
+period_count=4"算出来的：`start=4*1024/2=2048`、`stop=4*1024=4096`。
+
+### 根因（`external/tinyalsa_new/src/pcm.c` `pcm_set_config()`）
+```c
+    param_set_min(&params, SNDRV_PCM_HW_PARAM_PERIOD_SIZE, config->period_size);
+    ...
+    /* get our refined hw_params */
+    pcm->config.period_size  = param_get_int(&params, SNDRV_PCM_HW_PARAM_PERIOD_SIZE);
+    pcm->config.period_count = param_get_int(&params, SNDRV_PCM_HW_PARAM_PERIODS);
+    pcm->buffer_size = config->period_count * config->period_size;      // ★ 用申请值
+    ...
+    sparams.avail_min       = config->period_size;                      // ★ 申请值
+    sparams.start_threshold = config->period_count * config->period_size / 2;  // ★
+    sparams.stop_threshold  = config->period_count * config->period_size;      // ★
+```
+period 是用 **`param_set_min`** 申请的，所以内核**可以往大 round**
+（sc8280xp 的 audioreach 把 1024 顶到 1440）。代码明明把精化值读回了
+`pcm->config`（注释就写着 "get our refined hw_params"）**然后完全没用**，
+`buffer_size` 和三个 sw_params 全部仍按调用者的申请值算。
+
+> **这是 tinyalsa 自身的缺陷，不是我们配错**，对任何"硬件 period 与请求值不等"
+> 的平台都成立。值得提上游。
+
+### 为什么 tinyplay 一直是干净的（这个对照差点把我带偏）
+`tinyplay` 不受节拍约束，会一路把缓冲写满，`avail` 始终很小，**永远碰不到
+4096 这条线**；而 AudioFlinger 每个混音周期只写一块、让缓冲自然回落到约一个
+period —— 正好跨线。所以"tinyplay 30 秒零 XRUN"**不能**证明栈是好的，
+它只证明了"写得足够快就不会触发这个 bug"。
+
+⚠️ 我据此得出过一个错误的中间结论（"我们这一侧干净，问题在应用侧"），
+后来被 sw_params 的数字推翻。**教训：`tinyplay` 与 AudioFlinger 的写入节奏
+完全不同，不能互相当对照组。**
+
+### 修法：`patches/0008-tinyalsa-derive-sw-params-from-refined-hw-params.patch`
+把 `buffer_size` / `avail_min` / `start_threshold` / `stop_threshold` /
+`xfer_align` 全部改用读回来的 `pcm->config.*`（精化值）。
+调用者显式指定阈值时的分支保持不变。
+
+### 部署（不用刷 super）
+音频 HAL 在 APEX 里，而 APEX 是**单个文件** loop 挂载：
+`/vendor/apex/com.android.hardware.audio.apex`，且 `/vendor` 有 overlay。
+所以只推这 68.7 MB 一个文件 + 重启即可，不必刷 2.7 GB。
+`m libtinyalsav2 com.android.hardware.audio` → push → reboot。
+
+**端到端哈希验证**（确认跑的确实是打过补丁的那份）：
+```
+VM 构建产物         f77cb604…
+宿主机副本          f77cb604…
+设备 /vendor/apex/  f77cb604…                    ✓ 同一个文件
+APEX 镜像内暂存的 lib（CFI 变体）  02fba72a…
+设备已挂载的 lib                   02fba72a…      ✓ 精确匹配
+```
+apexd 也接受了：`/vendor/apex/com.android.hardware.audio.apex changed;
+collecting certs`，HAL 正常起来，`audioroute` 开机 **exit 0**。
+
+⚠️ **行为验证仍待实机**：`stop_threshold` 应从 4096 变成 5760，但需要**有应用
+真的放声音**才会开流（注入音量键不出声；`pm query-activities` 里没有应用注册
+`audio/wav` 的 VIEW intent；系统里也没有 `audioloop` 之类能自己开流的测试程序）。
+
+完整 super 也已重编（`M_RC=0` / `SUPER_RC=0`，sha256 `8326cb6c…`，
+压缩包在宿主机上），随时可刷以消除 overlay 漂移。
