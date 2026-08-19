@@ -342,6 +342,19 @@ PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/bin/audio-route.sh:$(TARGET_COPY_OUT_VENDOR)/bin/audio-route.sh \
     $(LOCAL_PATH)/etc/audioroute.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/audioroute.rc
 
+# ★ tinyalsa 工具集 —— 又一个同类漏网（2026-08-19 M3 上机才发现）。
+# audio-route.sh 第一件事就是找 tinymix，找不到就 `log 找不到 tinymix，放弃; exit 1`。
+# 而 tinymix 从来【没有】被列进 PRODUCT_PACKAGES：Stage 4 时它是手动 push 进
+# 设备的，于是 crDroid 上表现为「声卡注册了、服务也跑了，但混音器一个控件都没设」——
+# 播放不报错、就是没声音，比彻底坏掉更难查。
+# tinyplay/tinycap/tinypcminfo 一并装上：没有 framework 的时候，
+# `tinyplay x.wav -D 0 -d 1` 是唯一能证明"硬件确实出声"的手段（扬声器是 hw:0,1）。
+PRODUCT_PACKAGES += \
+    tinymix \
+    tinyplay \
+    tinycap \
+    tinypcminfo
+
 # ─── Stage 6: 修正 /sys/fs/bpf 的 SELinux 标签（主线内核 vs Android 的不兼容）───
 # 不装它 → ClatCoordinator 标签比对失败 → system_server 崩溃循环，开不进桌面。
 # 完整机制、对照实验与时序依据见 bin/bpf-relabel.sh 的注释。

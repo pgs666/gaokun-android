@@ -872,3 +872,93 @@ matrix 认领；设备 manifest 单方面声明它，就成了"多出来的实�
 删掉即可 —— 真凶从来就是 `media.c2.hal.selection=hidl`，
 这条声明是错误归因时代的遗物。`device/huawei/gaokun3/manifest.xml`
 现在只剩 `target-level="202504"`，删除理由写在文件注释里。
+
+### M3 验收（2026-08-19，实机）
+
+一键复跑：`bash scripts/verify-turnip.sh [浸泡秒数]`。
+
+```
+ro.hardware.vulkan = freedreno
+/vendor/lib64/hw/vulkan.freedreno.so   14 927 336 B   （vulkan.pastel.so 仍在，一行属性可切回）
+logcat                                 Turnip Adreno (TM) 690
+sys.boot_completed=1                   t+48s
+桌面进程                                surfaceflinger / system_server / systemui / launcher3 全在
+GMU 错误（timed out|watchdog|gdsc didn） 0
+a6xx_recover                            0
+SMMU FAULT#                             0
+screencap                               rc=0，3.83 MB PNG，锁屏逐像素正常
+崩溃残留（logcat -b crash）              无
+```
+
+**浸泡 22 分钟**（每 2 分钟采样，期间反复启动设置/浏览器 + `screencap`
+给 GPU 加负载；原计划 30 分钟，22 分钟时判定证据已足够而提前收）：
+
+```
+[2..22 分钟] gmu=0  recover=0  fault=0  boot=1
+桌面四进程 PID  696 882 1326 1650   ← 22 分钟内一次都没变（没有崩溃重启）
+smmustall 心跳  round=11400  清 CFCFG=132  抓 fault=0
+suspend entry   0
+```
+
+`清 CFCFG=132` 这个数字本身是有信息量的：内核确实在反复把
+`SCTLR.CFCFG` 写回 1（每次 GPU 上下电/恢复都会），解锁器每次都及时清掉 ——
+**说明这个常驻 workaround 不是摆设，去掉它只是等一次页错误的运气。**
+
+截图肉眼确认：1600×2560 壁纸、通知卡的毛玻璃/圆角、状态栏图标全部正常
+—— 是真的在做硬件合成，不是黑屏也不是软渲染兜底。
+
+### M3 之后的实机状态（M4 的起点，已逐项实测）
+
+| 项 | 状态 | 说明 |
+|---|---|---|
+| 触摸 | 设备在 | `Himax Capacitive TouchScreen` (event7)，未做手感复验 |
+| 键盘/触控板 | 在 | `HID 12d1:10b8` 一族 |
+| 声卡 | 注册 | `SC8280XP-HUAWEI-GAOKUN3` |
+| **音频路由** | ❌ **断** | 见下 |
+| 解码器 | 66 | `dumpsys media.player` 数 `c2.android.*` |
+| WiFi | 硬件通、**没连上** | 见下 |
+| 蓝牙 | OFF | 未开，`android-post-flash.sh` 里还禁着（HAL 已装，可以放开重测）|
+| 休眠 | 不挂起 | `suspend entry` 计数 0 |
+
+#### ★ tinyalsa 工具集从没进过构建配置（音频当前是断的）
+
+`/vendor/bin/audio-route.sh` 第一件事是找 `tinymix`：
+
+```sh
+M=/system/bin/tinymix
+[ -x $M ] || M=/vendor/bin/tinymix
+[ -x $M ] || { log -t audioroute "找不到 tinymix，放弃"; exit 1; }
+```
+
+实测 `command -v tinymix` → 缺。Stage 4 时它是**手动 push 进设备的**，
+从来没有出现在 `PRODUCT_PACKAGES` 里 —— 与 `audio-route.sh` 本身、
+`SC8280XP-HUAWEI-GAOKUN3-tplg.bin`、`smmu-nostall.sh` 是同一类漏网，
+而且已经是这一类的**第四个**。
+
+表现最阴：声卡注册了、服务也确实跑了、播放不报错 —— 就是一个混音器控件都没设，
+所以没声音。已加进 `device.mk`（`tinymix tinyplay tinycap tinypcminfo`），
+下次构建生效。
+
+> 教训固化：凡是"我 adb push 一下就好了"的东西，**当场就要写进 device.mk**。
+> 这一类问题在换 ROM 时会一次性全部引爆，而且每一个都伪装成硬件故障。
+
+#### WiFi：硬件全通，但网络被框架**永久**禁用（stage4 #29 复发）
+
+```
+ath11k_pci 已绑定 0006:01:00.0        wpa_supplicant running
+cmd wifi start-scan → 扫到 25 个 AP（含目标 AP，RSSI −38）
+WifiHalAidlImpl: Initialization is complete   （AIDL v3）
+但：NetworkSelectionStatus NETWORK_SELECTION_PERMANENTLY_DISABLED
+    mNetworkSelectionDisableReason NETWORK_SELECTION_DISABLED_NO_INTERNET_PERMANENT
+```
+
+即 `docs/stage4-findings.md` #29 那个坑：连通性探测端点被墙 → 框架判"永久无网"
+→ 把这个网络的自动加入**永久**关掉。`android-post-flash.sh` 里换国内端点那两条
+已经重新执行（`captive_portal_https_url` 现为 miui 的 generate_204），
+但**已经背上的永久禁用标记不会因此自动清除**：
+
+- `cmd wifi clear-user-disabled-networks` 清的是"用户禁用"，不是这一个；
+- `NO_INTERNET_PERMANENT` 的重新启用条件是**一次用户发起的连接**
+  （`cmd wifi connect-network <ssid> wpa2 <密码>` 或设置里点一下）。
+
+所以这一步需要密码，留给 M4 / 用户操作。硬件侧没有任何问题。

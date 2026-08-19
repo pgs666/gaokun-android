@@ -5,7 +5,49 @@
 在华为 MateBook E Go（Snapdragon 8cx Gen 3 / sc8280xp，代号 gaokun）上跑原生 AOSP，
 最终目标是能稳定运行 arm64 手游。
 
-**当前阶段：Stage 6 — ★crDroid 16.0 已完整启动进桌面，解码器 66 个（M2 完成）**（每次开工时更新这一行）
+**当前阶段：Stage 6 — ★crDroid 16.0 + 硬件 turnip 全通（M3 完成），下一步 M4 硬件回归**（每次开工时更新这一行）
+
+> **★★ Stage 6 M3 已于 2026-08-19 完成：Android 跑在 Adreno 690 硬件 Vulkan 上。**
+> `Turnip Adreno (TM) 690`、`boot_completed` t+48s、锁屏/桌面渲染正常
+> （3.83 MB screencap 逐像素对）；22 分钟带负载浸泡：**GMU 错误 0 /
+> a6xx_recover 0 / SMMU fault 0**，桌面四进程 PID 全程不变。
+> 一键复验 `bash scripts/verify-turnip.sh`，案卷 `docs/stage6-crdroid.md`。
+>
+> 做法是**把 Stage 5 的补丁树整棵铺回来**，不是重跑生成管线；
+> 另外首次把 `smmu-nostall.sh`（GPU SMMU stall 解锁器，常驻安全网）
+> 写进了构建配置。
+>
+> **M3 顺带推翻了三条旧结论（都写进了案卷）**：
+> 1. ★"crDroid 与我们的 mesa 是同一个 commit" —— **假阳性**。
+>    `git log -1` 比的是 `.git` 的 HEAD，而 mesa 26 当年是**铺在工作树上
+>    从未提交**的，所以两棵树必然显示同一个 commit。实际是
+>    25.3.0-devel vs **26.0.3**，`git diff` 3791 个文件。
+>    判"两棵源码树是否相同"，`git status --porcelain | wc -l` 才是那一句。
+> 2. ★"s2idle 没修好" —— **一直是好的**。`/sys/power/wake_lock` 是
+>    `radio:wakelock` 0660，shell 连读都读不了，我把 `cat` 的
+>    "Permission denied" 当成了"内容为空"。实测 26 分钟 `suspend entry` = 0。
+> 3. ★"`adb root` 不生效" —— **两步可解**：
+>    `adb shell setprop service.adb.root 1` 然后 `adb root`
+>    （permissive 下 shell 能写这个属性，而 adbd 自己那一步没生效）。
+>    顺带查明 `ro.build.type` 是 **user** 而非 userdebug。
+>    ★ 这把钥匙的真正价值是**远程救砖**：拿到 root 就能挂 U 盘 ESP
+>    （`/dev/block/sda1`，**不是**内置盘 `nvme0n1p1`）直接改 `loader.conf`。
+>
+> **M3 最费时间的坑**：刷完 super 后 oneshot 到了 `android.conf`，
+> 那是**旧 AOSP 的 Image(kb18)+ramdisk**，crDroid 要用 `crdroid.conf`
+> （`Image-kb23`）。用错内核 → 没有 `patches/0007` → bpffs 标签崩溃循环，
+> 症状一路指向刚换的 turnip 而其实毫无关系。
+> **判据：`adb shell uname -a` 的编译时间必须与本次内核一致。**
+> `scripts/deploy-from-ubuntu.sh` 已改成设 oneshot 到 `crdroid.conf`，
+> 且不再篡改默认启动项（默认必须留 Ubuntu，那是唯一的自动回落安全网）。
+>
+> **M4 起点（已实测）**：触摸设备在（`Himax Capacitive TouchScreen`）、
+> 声卡注册、解码器 66、蓝牙 HAL 装着但被 `android-post-flash.sh` 禁着；
+> ⚠️ **音频当前是断的** —— `tinymix` 从没进过 `PRODUCT_PACKAGES`
+> （`audio-route.sh` 找不到它就直接放弃），已补进 device.mk 待下次构建；
+> ⚠️ **WiFi 硬件全通但网络被框架永久禁用**
+> （`NETWORK_SELECTION_DISABLED_NO_INTERNET_PERMANENT`，stage4 #29 复发），
+> 解禁需要一次带密码的用户发起连接。
 
 > **★★ Stage 6 M2 已于 2026-08-19 完成：crDroid 16.0 完整启动进桌面。**
 > `sys.boot_completed=1`（t+40s），surfaceflinger/system_server/systemui/launcher3
@@ -39,8 +81,8 @@
 > 当成了"内容为空"。实测 uptime 21 分钟时 `suspend entry` 计数 **0**
 > （修之前 45–60 秒必挂且醒不来）。
 >
-> **还欠的**：`adb root` 不生效（`ro.debuggable=1` 但 `adb root` 无输出、
-> `id` 仍是 shell）；turnip 接入中（M3，见下）。
+> **还欠的**：见首屏 M3 段的「M4 起点」——音频（tinymix 漏装，已补待构建）、
+> WiFi（网络被框架永久禁用，解禁要密码）、蓝牙（装着但禁用中）。
 
 > **★决策（2026-08-19）：硬件使能告一段落，下一步转 crDroid 移植。**
 > 理由：剩下卡住的东西（App/媒体没声音）**不是硬件或内核问题**，
