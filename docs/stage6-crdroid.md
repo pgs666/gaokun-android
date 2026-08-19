@@ -1182,3 +1182,41 @@ libc/libm/libdl/libc++ 是 LLNDK，不用管）。
 | `scripts/android-post-flash.sh` | 删 `svc power stayon true`；删蓝牙禁用两行；加 `screen_off_timeout=120000` 与 `service.adb.tcp.port` |
 | `device/huawei/gaokun3/device.mk` | （M3 已排队）`tinymix/tinyplay/tinycap/tinypcminfo` 本轮首次真的编出来 |
 
+
+## 7. ⚠️ 刷机踩坑：sha256 对得上 ≠ 刷对了
+
+本轮把新 `super.img` 写进分区时踩了 CLAUDE.md 早就写着的那个坑，值得记一笔，
+因为**它伪装成"校验通过"**：
+
+1. 我用 `zstd -dc | dd of=/dev/disk/by-partlabel/super` 流式写入，
+   回读前 2703426144 字节的 sha256 = `9372bc02…`，与源文件**完全一致**。
+2. 但偏移 4096 的 LP geometry 魔数是 **`00000000`**，不是 `67446c61`。
+3. 原因：分区头 4 字节是 **`3a ff 26 ed`**（= 0xED26FF3A）——
+   **构建出的 `super.img` 是 Android sparse 格式**，我把 sparse 容器原样写了进去。
+
+> **判据顺序要反过来：先看格式，再谈校验。**
+> - 刷前：`od -A n -t x1 -N 4 super.img` → `3aff26ed` 就必须
+>   `simg2img super.img <分区>`（`scripts/deploy-android.sh:88-96` 已有这个分支；
+>   Ego 的 Ubuntu 自带 `/usr/bin/simg2img`）。
+> - 刷后：**偏移 4096 必须是 `67446c61`**。sha256 只能证明"字节搬对了"，
+>   证明不了"搬的是对的东西"。
+> - 注意区分：从**已经刷好的分区**里 dd 出来的镜像是**裸的**（不是 sparse），
+>   可以直接 dd 回去 —— 发布包里的 `images/super.img.zst` 就是这一种。
+>   所以"上次能直接 dd"不构成"这次也能"的理由。
+
+顺带一个数字：本地解压 → LAN → Ego 落 tmpfs → `simg2img` 写 nvme，
+2.7 GB 全程 **43 秒**。比"VM 直连 Ego"（实测 310 KB/s）快两个数量级，
+以后大镜像都走"VM→宿主机→Ego"。
+
+## 8. M4 收尾状态（实测）
+
+| 项 | 状态 |
+|---|---|
+| 引导 | 新 super 已刷入并校验（LP 魔数 `67446c61`）；**默认启动项仍是 Ubuntu** |
+| 启动 | `boot_completed=1` @ **24 秒**（M3 是 48 秒），内核 `#16` |
+| ★音频 | `audioroute` 开机 **exit status 0** —— "扬声器路由已应用（PCM1 / WSA / PA=12 / BOOST=off）"。`tinymix` 由镜像自带（`/system/bin`），`tinyplay` 让 `pcm1p` 进入 `state: RUNNING` |
+| ★息屏 | 2 分钟自动息屏 → `KEYCODE_WAKEUP` 点亮，`committedState` OFF→ON，背光恢复；**`suspend_stats/success` 全程 0**（wakelock 正确挡住真挂起）；息屏/点亮后 GMU 错误 0、SMMU FAULT 0、桌面四进程 PID 不变 |
+| 图形 | `verify-turnip.sh` 全绿：`Turnip Adreno (TM) 690`、GMU 错误 0、`a6xx_recover` 0、FAULT 0、`screencap` rc=0 出 **3,838,221 字节**正常锁屏图（与 M3 的 3.83 MB 同量级） |
+| 蓝牙 | 跑完新版 `android-post-flash.sh` 后仍 `state: ON`（证明 #30 的禁用已真正拆除） |
+| WiFi | 已连（锁屏图上的图标为证），`service.adb.tcp.port=5555` 已开 |
+| 待办 | ①实机听声（框架路径）②装游戏实测 ③想真修 s2idle 要先编带 `CONFIG_PM_DEBUG` 的内核 |
