@@ -1513,9 +1513,19 @@ APEX 镜像内暂存的 lib（CFI 变体）  02fba72a…
 apexd 也接受了：`/vendor/apex/com.android.hardware.audio.apex changed;
 collecting certs`，HAL 正常起来，`audioroute` 开机 **exit 0**。
 
-⚠️ **行为验证仍待实机**：`stop_threshold` 应从 4096 变成 5760，但需要**有应用
-真的放声音**才会开流（注入音量键不出声；`pm query-activities` 里没有应用注册
-`audio/wav` 的 VIEW intent；系统里也没有 `audioloop` 之类能自己开流的测试程序）。
+### ★ 行为验证：已量化确认（2026-08-20，用户实机"声音正常了"）
+```
+修复前:  avail_min 1024   start_threshold 2048   stop_threshold 4096   ← 按申请值 1024x4
+修复后:  avail_min 1440   start_threshold 2880   stop_threshold 5760   ← 按协商值 1440x4
+                                                 == buffer_size  ✓
+
+40/40 个采样点都在放音，XRUN = 0            （修复前约一半的采样点在 XRUN）
+avail 在 0–2175 之间摆动，缓冲真的被填满   （修复前死钉 4543/3103，从不低于 3103）
+Normal mixer raw underrun counters: partial=0 empty=0
+```
+→ `stop_threshold` 与 `buffer_size` 一致，XRUN 归零，用户听感恢复正常。
+**§11 与 §12 合起来才是完整的修复**：§11 删 MMAP 把"完全没声"变成"有声但卡"，
+§12 修 tinyalsa 才真正治好。
 
 完整 super 也已重编（`M_RC=0` / `SUPER_RC=0`，sha256 `8326cb6c…`，
 压缩包在宿主机上），随时可刷以消除 overlay 漂移。
