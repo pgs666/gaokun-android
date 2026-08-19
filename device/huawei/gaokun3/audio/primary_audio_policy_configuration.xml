@@ -36,11 +36,16 @@
                      samplingRates="44100 48000"
                      channelMasks="AUDIO_CHANNEL_OUT_MONO AUDIO_CHANNEL_OUT_STEREO"/>
         </mixPort>
-        <mixPort name="mmap_no_irq_out" role="source" flags="AUDIO_OUTPUT_FLAG_DIRECT AUDIO_OUTPUT_FLAG_MMAP_NOIRQ">
-             <profile name="" format="AUDIO_FORMAT_PCM_16_BIT"
-                      samplingRates="44100 48000"
-                      channelMasks="AUDIO_CHANNEL_OUT_STEREO"/>
-        </mixPort>
+        <!-- ★ mmap_no_irq_out 已删除（2026-08-20 M4）。
+             原因：原神（Unity/AAudio）会优选 MMAP 独占低延迟流，实测拿到
+               AudioMmapOut_*, type 5 (MMAP_PLAYBACK), HAL frame count: 480
+             —— 只有 10 ms 缓冲。而本机是 AOSP 示例 HAL + 主线 audioreach，
+             没有 DSP offload，游戏又把 8 个核占满，撑不住这么小的周期：
+             /proc/asound/card0/pcm1p/sub0/status 反复出现 XRUN，表现为游戏没声音
+             （而音乐播放器走普通 AudioTrack 路径、4096 帧 / 85 ms 缓冲，一直正常）。
+             HAL 侧优先级不是原因：writer/out_0 都是 nice=-19，且有 CAP_SYS_NICE。
+             不声明 MMAP 后 AAudio 会回落到普通共享路径：延迟变高，但不会断。
+             ⚠️ 输入侧 mmap_no_irq_in 故意保留（游戏不录音，无证据说明它有问题）。 -->
         <mixPort name="primary input" role="sink">
             <profile name="" format="AUDIO_FORMAT_PCM_16_BIT"
                      samplingRates="8000 11025 16000 32000 44100 48000"
@@ -94,7 +99,7 @@
     </devicePorts>
     <routes>
         <route type="mix" sink="Speaker"
-               sources="primary output,compressed_offload,mmap_no_irq_out"/>
+               sources="primary output,compressed_offload"/>
         <route type="mix" sink="primary input"
                sources="Built-In Mic"/>
         <route type="mix" sink="mmap_no_irq_in"

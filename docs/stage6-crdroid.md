@@ -1331,3 +1331,58 @@ kill 后 trap 生效：cur_state 归 0，两个 policy 频率全部恢复
 `cpufreq-cpu0`/`cpufreq-cpu4`。**只需重编 DTB，不必重编内核**
 （可 `dtc -I dtb -O dts` 反编译现有 DTB → 改 → `dtc -I dts -O dtb` 回写）。
 根治之后本脚本就可以退役。
+
+## 11. 游戏没声音：MMAP 低延迟流撑不住（2026-08-20）
+
+**症状**：音乐播放器正常，但原神里没声音。
+
+### 排查链（每一步都排除了一个看起来很像的嫌疑）
+1. **混音器路由完好** —— `>AIF1_PB` / `>RX0` / DAC on / PA=12 全在，`audioroute` 的
+   设置没有被谁重置。
+2. **框架确实在写** —— `AudioFlinger: Standby: no, Total writes: 32974`，
+   `STREAM_MUSIC` 未静音。所以不是"没在放"。
+3. ★**`/proc/asound/card0/pcm1p/sub0/status` 反复出现 `XRUN`** —— 缓冲欠载。
+   音频写下去了但来不及喂，表现就是断续/听不见。
+4. **不是抢不到 CPU**（这条排除掉了一个很有说服力的猜想）：
+   - `CONFIG_RT_GROUP_SCHED` 不在配置里（=n），`sched_rt_runtime_us` =
+     `sched_rt_period_us` = 1000000，RT 带宽无限制；
+   - `SurfaceFlinger` 的线程是 `SCHED_FIFO` 优先级 2 → **这个内核的 RT 调度是好的**；
+   - AudioFlinger 的 `AudioOut_D`/`AudioOut_1D` 是 `SCHED_OTHER` **nice=-19**
+     （这是 AOSP 的正常做法，不是 bug）；
+   - 音频 HAL（`android.hardware.audio.service-aidl.example`）的
+     `writer`×3 / `out_0` 也都是 **nice=-19**，且 `CapEff` 含 `CAP_SYS_NICE`。
+   → 优先级全部正常，starvation 不成立。
+5. ★**真凶：缓冲大小差了 8.5 倍**
+   ```
+   AudioOut_D      (type 0 MIXER)          HAL frame count: 4096   ← 85 ms
+   AudioMmapOut_75 (type 5 MMAP_PLAYBACK)  HAL frame count:  480   ← 10 ms
+                                           HAL buffer size: 1920 bytes
+                                           Client uid 10268 = 原神
+   ```
+   原神（Unity → AAudio）优选 **MMAP 独占低延迟**流。策略配置里声明了
+   `mmap_no_irq_out`（`AUDIO_OUTPUT_FLAG_MMAP_NOIRQ`），于是 AAudio 就用了。
+   但本机是 **AOSP 示例 HAL + 主线 audioreach、没有 DSP offload**，
+   再叠加游戏把 8 个核占满 —— 10 ms 周期根本喂不住 → XRUN。
+   而音乐播放器走普通 AudioTrack 路径、4096 帧 / 85 ms，所以一直好的。
+   > 附带发现：策略里**没有** `AUDIO_OUTPUT_FLAG_FAST`，所以 `No FastMixer`。
+   > 低延迟请求只有 MMAP 一条路可走，没有中间档。
+
+### 修法：不再声明 MMAP 输出
+删掉 `primary_audio_policy_configuration.xml` 里的 `mmap_no_irq_out` mixPort，
+并把它从 Speaker 路由的 `sources` 摘掉。AAudio 于是回落到普通共享路径 ——
+**延迟变高（85 ms），但不会断**。对手游是划算的取舍。
+
+- ⚠️ **输入侧 `mmap_no_irq_in` 故意保留**：游戏不录音，没有证据说明它有问题，
+  少改一处少一个风险面。
+- 也试过运行时属性 `aaudio.mmap_policy=1`(NEVER)：**对已经打开的流无效**，
+  而重启 audioserver 又会打断游戏的音频会话，所以那条路验不干净。
+  最后清掉属性、只留配置改动，让变量唯一。
+
+**部署后验证**：
+```
+MMAP_PLAYBACK 线程数    4 → 0
+输出线程                MIXER ×2 + OFFLOAD ×1（正常）
+策略解析                无错误
+tinyplay -D 0 -d 1      pcm state: RUNNING   ← 硬件路径完好
+```
+⚠️ **游戏侧效果待实机确认**（需要重启游戏让它重新开流）。
