@@ -60,18 +60,26 @@ echo
 echo "════ 3) 写 loader 配置 ════"
 cp "$U/loader/entries.srel" "$I/loader/entries.srel" || fail "entries.srel"
 
-# 默认项 = Android。这与「U 盘那份默认必须留 Ubuntu」的纪律【不冲突】。
-# 依据（2026-08-20 实测，不是推测）：装完之后重启一次，读 EFI 变量
-#   /sys/firmware/efi/efivars/LoaderDevicePartUUID-4a67b082-...
-# 得到 d5cb76b5-d8be-4505-ab84-c492bd3bae6e = **/dev/sda1（U 盘）**。
-# 也就是说固件仍然优先 U 盘 ESP：
-#   * U 盘在  → 走 U 盘那份，默认 Ubuntu，自动回落安全网完好；
-#   * U 盘不在 → 才轮到内置这份，而那时 Ubuntu 的 rootfs（U 盘 sda2）
-#                也不在了，默认 Ubuntu 只会掉进 initramfs。
-# 所以内置这份默认 Android 才是对的，且不损失任何安全网。
-# 万一 Android 起不来：菜单里还有 systemd-boot 自动发现的 Windows Boot Manager。
+# 默认项 = Ubuntu 救援系统。纪律不变：**默认必须落在能远程接入的系统上**，
+# 这样 Android 挂死时拍一下电源键就自动回落，不需要有人在机器边。
+#
+# ⚠️★ 这里有过一次代价不小的判断失误，写下来免得重蹈：
+#   装完引导链后我读 EFI 变量 LoaderDevicePartUUID 得到 d5cb76b5-…（= U 盘 sda1），
+#   据此认为"固件永远优先 U 盘，内置这份只在 U 盘不在时才用到"，
+#   于是把默认项设成了 Android。**删掉 Windows 分区之后这个变量变成了
+#   825eaf3a-…（= 内置盘 nvme0n1p1）** —— 固件当场翻转成优先内置盘，
+#   而它的默认项是 Android，于是自动回落的安全网悄无声息地断了，
+#   症状只是"莫名其妙进了 Android"，极难联想到根因。
+#   **教训：引导优先级不是一次测定就永久成立的事实，动过分区表必须重读。**
+#
+# 前提：内置盘上要真的有一个不依赖 U 盘的 Ubuntu（本仓做法是把活动根
+# rsync 到 nvme0n1p3，hostname 改成 gaokun3-rescue 便于一眼分辨）。
+# 若还没有，就把默认项暂时留给 U 盘上的 Ubuntu，别留给 Android。
+#
+# 进 Android：sudo bootctl set-oneshot <mid>-int-crdroid.conf 后重启，
+#            或开机时在 15 秒菜单里手选。
 cat > "$I/loader/loader.conf" <<'CONF'
-default 8a29534fa802480d9fbb71aa18c01d7b-int-crdroid.conf
+default 8a29534fa802480d9fbb71aa18c01d7b-int-ubuntu.conf
 timeout 15
 console-mode keep
 editor no

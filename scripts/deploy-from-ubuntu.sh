@@ -13,7 +13,14 @@
 #   SRC_TREE=~/aosp bash deploy-from-ubuntu.sh super
 #
 # 前提：Ego 已有直连构建机的 ssh 钥匙（vahiru@<BUILD_VM>），
-#       ESP 挂在 /boot/efi，Android 目录是 <machine-id>/android/。
+#       ESP 挂在 /boot/efi（★现在是【内置盘】nvme0n1p1，不再是 U 盘 sda1），
+#       Android 目录是 <machine-id>/android/。
+#
+# ★ 2026-08-20 全内置化之后的现状：
+#     - 救援系统 = 内置盘 nvme0n1p3 上的 Ubuntu（hostname gaokun3-rescue），
+#       不需要 U 盘；默认启动项就是它，Android 挂死拍电源键即自动回落。
+#     - Android 分区：super=nvme0n1p8，userdata=nvme0n1p2（376G），
+#       metadata=nvme0n1p10；nvme0n1p9 是迁移前 userdata 的备份（userdata-old）。
 set -euo pipefail
 
 VM=vahiru@<BUILD_VM>
@@ -31,7 +38,12 @@ ESP=/boot/efi/$MID/android
 SUPER_PART=/dev/nvme0n1p8
 MODE=${1:-all}
 # ENTRY 提前定义：flash_boot 要靠它找到条目实际引用的文件名
-ENTRY=${ENTRY:-$MID-crdroid.conf}
+# ★ 2026-08-20 起默认条目名带 int- 前缀：引导链已搬进【内置 ESP】(nvme0n1p1)，
+# 条目是 $MID-int-crdroid.conf / $MID-int-ubuntu.conf。
+# U 盘上那套老条目（$MID-crdroid.conf 等）还在，但删掉 Windows 分区之后固件
+# 改为优先内置 ESP，所以跑这个脚本的救援系统 /boot/efi = 内置 ESP。
+# 要针对 U 盘那套操作就显式传 ENTRY=$MID-crdroid.conf。
+ENTRY=${ENTRY:-$MID-int-crdroid.conf}
 
 pull() {  # pull <远端文件> <本地目标>
   echo "拉取 $(basename "$1") …"

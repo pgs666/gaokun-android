@@ -5,7 +5,7 @@
 在华为 MateBook E Go（Snapdragon 8cx Gen 3 / sc8280xp，代号 gaokun）上跑原生 AOSP，
 最终目标是能稳定运行 arm64 手游。
 
-**当前阶段：Stage 6 M5 — ★修复已固化进镜像；原神可玩；传感器判死；引导链已搬进内置盘（待拔盘实测）**（每次开工时更新这一行）
+**当前阶段：Stage 6 M5 完成 — ★修复已固化进镜像；原神/明日方舟可玩；Windows 已抹除，/data 370G，救援系统全内置**（每次开工时更新这一行）
 
 > **★★ Stage 6 M5（2026-08-20）：M4 的成果全部固化进镜像 + 传感器判死。**
 >
@@ -47,22 +47,32 @@
 > 至今没有任何 sc8280xp 设备做到，X13s 也没有）。★**游戏不受影响。**
 > 工具 `scripts/probe-windows-sensors.sh`，完整证据 `docs/stage4-findings.md` #37。
 >
-> ★**引导链已搬进内置 ESP（第一步完成，待拔盘实测）**。原本整条 systemd-boot 链
-> （含 `crdroid.conf` 与全部内核）**只在 U 盘 sda1 的 ESP 上**，内置 ESP 里
-> 只有 Windows 引导器 —— 拔掉 U 盘 Android 完全起不来，这是抹 Windows 的前置阻塞。
-> `scripts/esp-migrate-to-internal.sh` 已执行：**纯增量，没删改任何 Windows 文件**，
-> 占 108 MiB、剩 80 MiB；被覆盖的 `EFI/Boot/bootaa64.efi` 已备份成
-> `.bak-windows`（3120168 B，与 `bootmgfw.efi` 字节数相同 = 确实是 Windows 引导器副本）。
-> - ★**实测固件仍优先 U 盘**：`LoaderDevicePartUUID` = `d5cb76b5…` = `/dev/sda1`。
->   所以 U 盘在时走的还是 U 盘那份、默认 Ubuntu、**自动回落安全网完好**；
->   内置那份只在 U 盘不在时才用到，故其默认项设为 **Android** 才对（已设）。
-> - **待做（需人在机器边）**：拔 U 盘开机，应自动进 Android。
->   兜底是菜单里 systemd-boot 自动发现的 Windows Boot Manager，测坏也不变砖。
-> - ⚠️**第二步（删 Windows）之前还欠一件事**：Ubuntu 的 rootfs 仍在 U 盘 sda2 上。
->   Windows 删掉后若 U 盘也不插，就没有任何救援系统了 ——
->   所以第二步要顺带把 Ubuntu 装进腾出来的空间（有 120 GiB+）。
-> - 实测分区：p1 ESP 300M / p3 Windows 120G / p4 Data 256G / p5 WINPE 1G /
->   p6 Onekey 18G / p7 WinRE 1G / **p8 super 12G / p9 userdata 64G / p10 metadata 32M**。
+> ★★**Windows 已抹除，整机归 Android；U 盘不再是必需品**（2026-08-20，用户授权
+> "数据都备份了，直接不要"）。
+> - **引导链已搬进内置 ESP**（`scripts/esp-migrate-to-internal.sh`，纯增量）。
+>   **拔盘实测通过**：`/dev/block/sd*` 不存在，Android 照常启动。
+> - **删除 Windows 的 p2/p3/p4/p5/p6/p7**。现在盘上只有：
+>   p1 ESP 300M / **p2 userdata 376G** / p8 super 12G /
+>   p9 `userdata-old` 64G（迁移前备份，暂留）/ p10 metadata 32M /
+>   **p3 Ubuntu 救援 24.6G**。未分配 1007 KiB。
+> - ★**`/data` 62 GiB → 370 GiB（可用 294 GiB）**。此前它**已经 100% 满**
+>   （原神 34G + 明日方舟 19G，非 root 只剩 235 MiB，装不下任何东西）。
+>   做法是**新建 + `dd` 整盘克隆 + `resize2fs` + 换 PARTLABEL**，不是原地扩容：
+>   `dd` 逐字节复制，SELinux 扩展属性/capabilities/硬链接零解释带过去；
+>   `fstab.gaokun3` 用的是 `by-name/userdata`（**PARTLABEL**）所以改标签即可，
+>   fstab 一字未动；**旧 p9 全程只读并保留**，出问题重启就是原来那台机器。
+>   校验：文件数 49999=49999、字节数 63 237 600 073 相同、大文件 md5 抽查 3/3。
+> - **Ubuntu 救援系统已搬进内置盘**（`rsync -aHAXx` 克隆活动根，134403 个文件），
+>   hostname `gaokun3-rescue`、root=`nvme0n1p3`、ssh 仍是 192.168.31.230。
+> - ⚠️★**固件的启动优先级会变，别当成一次测定的事实**：装引导链时
+>   `LoaderDevicePartUUID` = `d5cb76b5…`（U 盘）；**删掉 Windows 分区之后变成
+>   `825eaf3a…`（内置盘）**。于是"内置 ESP 只在 U 盘不在时才用到"当场失效，
+>   而它的默认项当时是 Android → **自动回落安全网悄悄断了**，
+>   症状只是"莫名其妙进了 Android"。动过分区表就要重读这个变量确认。
+> - **现役闭环（两个方向都实测通过）**：默认 → 内置救援 Ubuntu；
+>   `sudo bootctl set-oneshot <mid>-int-crdroid.conf` → Android；
+>   Android 里 `adb reboot` → 自动回落救援系统。
+>   ⚠️ 条目名带 **`int-`** 前缀，U 盘那套旧名（`<mid>-crdroid.conf`）已非现役。
 >
 > **★★ Stage 6 M4（2026-08-19 夜）：s2idle 定性 + 音频解锁。**
 >

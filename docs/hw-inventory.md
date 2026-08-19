@@ -584,15 +584,73 @@ Windows Boot Manager 会被 systemd-boot **自动发现并列进菜单**，无�
 内置这份只在 U 盘不在时才会被用到 —— 而那时 Ubuntu 的 rootfs（U 盘 sda2）
 也不在了。所以**内置 ESP 的默认项设成 Android 才是对的，且不损失任何安全网**。
 
-#### 待做：拔盘实测（需要人在机器边）
+#### 拔盘实测：✅ 通过（2026-08-20，用户实机）
 
-拔掉 U 盘 → 开机 → 应当自动进 Android（15 秒菜单，默认已是 Android）。
-**这一步的兜底是 Windows**：菜单里有 Windows Boot Manager，Android 起不来也不至于变砖。
-测通之后才谈第二步（删 Windows 分区）。
+拔掉 U 盘开机，Android 自动起来；`/dev/block/sd*` 不存在，只有 `nvme0n1`
+—— 证明整条引导链已脱离 U 盘。
 
-⚠️ **第二步之前还欠一件事**：Ubuntu 的 rootfs 仍在 U 盘 sda2 上。
-Windows 删掉之后如果 U 盘也不插，就**没有任何救援系统**了。
-所以第二步应当顺带把 Ubuntu 装进内置盘腾出来的空间（有 120 GiB+ 可用）。
+---
+
+### 8quinquies. ✅ Windows 已抹除，全盘归 Android（2026-08-20）
+
+用户确认「数据都备份了，直接不要」。执行结果：
+
+| 盘上顺序 | 分区 | 大小 | 用途 |
+|---|---|---|---|
+| 1 | p1 | 300 MiB | ESP（引导链） |
+| 2 | **p2** | **376 GiB** | **Android `userdata`**（原 64 GiB） |
+| 3 | p8 | 12 GiB | Android `super` |
+| 4 | p9 | 64 GiB | `userdata-old` —— 迁移前的完整备份，暂留 |
+| 5 | p10 | 32 MiB | Android `metadata` |
+| 6 | **p3** | **24.6 GiB** | **Ubuntu 救援系统**（`gaokun3-rescue`） |
+
+未分配空间 1007 KiB（全盘用尽）。**Windows 的 p2/p3/p4/p5/p6/p7 全部删除。**
+
+#### `/data` 扩容用的是「新建 + 克隆 + 换标签」，不是原地 resize
+
+`/data` 当时已经 **100% 满**（62 GiB 用掉 59 GiB，非 root 只剩 235 MiB，
+原神 34 GiB + 明日方舟 19 GiB）。做法：
+
+1. 删 p2/p3/p4 → 前面腾出 376 GiB 连续空间，建 `userdata-new`
+2. **`dd` 整盘克隆** 旧 p9 → 新分区（不是 rsync）。逐字节复制，
+   SELinux 扩展属性 / capabilities / 硬链接全部原样带过去，零解释零遗漏。
+3. `e2fsck -f` → `resize2fs` 扩到 376 GiB → 再 `e2fsck -f`，三步全 rc=0
+4. 校验：文件数 49999=49999、字节数 63 237 600 073 相同、大文件 md5 抽查 3/3
+5. **先把旧的改名 `userdata-old`，再把新的改名 `userdata`**
+   —— `fstab.gaokun3` 用的是 `/dev/block/by-name/userdata`（**PARTLABEL**，
+   不是 PARTUUID），所以换个标签就完事，fstab 一个字都不用改。
+6. 旧 p9 **全程只读、至今保留**，任何一步出问题重启就是原来那台机器。
+
+结果：`/data` 62 GiB → **370 GiB（可用 294 GiB）**，游戏数据不用重下。
+
+#### ★ 固件的启动优先级会变 —— 删分区之后翻转了
+
+这是本轮最容易踩空的一条：
+
+| 时间点 | `LoaderDevicePartUUID` | 实际引导的 ESP |
+|---|---|---|
+| 刚把引导链装进内置盘时 | `d5cb76b5-…` | **U 盘 sda1** |
+| **删掉 Windows 分区之后** | `825eaf3a-…` | **内置盘 nvme0n1p1** |
+
+于是"内置 ESP 只在 U 盘不在时才用到"这个前提**当场失效**，
+而内置那份的默认项当时被设成了 Android ——
+**「Android 挂死 → 拍电源键 → 自动回落到可远程接入的系统」这条安全网断了**，
+而且断得毫无征兆（表现只是"莫名其妙进了 Android"）。
+
+修法：内置 ESP 的默认项改成 `-int-ubuntu.conf`（内置救援系统）。
+> 教训：**引导优先级不是一次测定就永久成立的事实**，
+> 动过分区表就要重新读 `LoaderDevicePartUUID` 确认一遍。
+
+#### 远程救砖闭环（全内置，实测两个方向都通）
+
+```
+默认      → 内置救援 Ubuntu (root=/dev/nvme0n1p3, hostname gaokun3-rescue, 192.168.31.230)
+oneshot   → sudo bootctl set-oneshot <mid>-int-crdroid.conf && reboot → Android
+Android 里 adb reboot → 自动回落到救援 Ubuntu
+```
+
+⚠️ 条目名带 **`int-`** 前缀。U 盘上那套旧条目（`<mid>-crdroid.conf`）仍在，
+但已不是现役 —— 用错名字就是 M3 那个"用错条目跑旧内核"的坑。
 
 
 
