@@ -6,12 +6,21 @@
 # 所以 by-name 可用。见 docs/stage2-plan.md 第 2.2 节。
 #
 # <src>  <mnt_point>  <type>  <mnt_flags>  <fs_mgr_flags>
+#
+# ★ slotselect 是 A/B 的必需项（2026-08-20 M6 实测，代价是两次白刷）。
+# 开了 Virtual A/B 之后 super 里的逻辑分区叫 system_a / system_b / vendor_a …，
+# 而 fs_mgr 只有看到 slotselect 才会把 ro.boot.slot_suffix 拼到名字后面。
+# 少了它 → 去找字面叫 "system" 的逻辑分区 → 找不到 → first stage mount 失败
+# → **init 主动 reboot（不是 panic）**，所以 pstore 是空的、屏幕一闪而过，
+# 症状只是"进 A 槽就重启"，完全看不出跟 fstab 有关。
+# 判据不是猜的：device/linaro/dragonboard/fstab.common（树内 A/B 设备）
+# 每一条 logical 行都带 slotselect，逐字对照即得。
 
 # 逻辑分区，都在 super 里
-system       /system       ext4  ro,barrier=1  wait,logical,first_stage_mount
-system_ext   /system_ext   ext4  ro,barrier=1  wait,logical,first_stage_mount
-product      /product      ext4  ro,barrier=1  wait,logical,first_stage_mount
-vendor       /vendor       ext4  ro,barrier=1  wait,logical,first_stage_mount
+system       /system       ext4  ro,barrier=1  wait,logical,first_stage_mount,slotselect
+system_ext   /system_ext   ext4  ro,barrier=1  wait,logical,first_stage_mount,slotselect
+product      /product      ext4  ro,barrier=1  wait,logical,first_stage_mount,slotselect
+vendor       /vendor       ext4  ro,barrier=1  wait,logical,first_stage_mount,slotselect
 
 # 物理分区
 /dev/block/by-name/metadata  /metadata  ext4  noatime,nosuid,nodev,discard  wait,formattable,first_stage_mount,check

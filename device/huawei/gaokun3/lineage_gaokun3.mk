@@ -148,6 +148,22 @@ PRODUCT_ADB_KEYS := device/huawei/gaokun3/adb_keys
 $(call inherit-product, vendor/lineage/config/common_full_tablet_wifionly.mk)
 
 # 设备配置（固件、init rc、HAL、图形、WiFi、音频 —— Stage 2–5 的全部成果）
+# ★ 强制生成 OTA 包（M6）。
+#
+# build/make/core/Makefile:5793-5806 会在三种情况下把 build_ota_package 关掉，
+# 我们中了两条：
+#   1. INSTALLED_BOOTIMAGE_TARGET 为空 且 TARGET_NO_KERNEL=true
+#      —— 本机内核在树外编，不产 boot.img；
+#   2. 没有 recovery.fstab —— 本机 TARGET_NO_RECOVERY=true。
+# 于是 `m otapackage` 报 "ninja: unknown target 'otapackage'"，
+# 一个极具迷惑性的错误：看着像 target 名字写错了，其实是被条件编译掉了。
+#
+# 这一行会【一次跳过全部三条检查】。AOSP 自己的注释就写着它是给
+# "A target without a kernel" 用的（同文件 5788-5792 行），正是我们这种
+# 树外内核 + 无 recovery 的情况。我们的 AB_OTA_PARTITIONS 里也只有 super
+# 里那四个动态分区，本来就不需要 boot/recovery 参与 OTA。
+PRODUCT_BUILD_GENERIC_OTA_PACKAGE := true
+
 # ★ Virtual A/B（M6）。launch.mk 而不是 compression.mk：
 # 内核没有 CONFIG_DM_USER，压缩快照用不了（理由见 BoardConfig.mk 的 A/B 段）。
 # launch.mk 只做三件事：PRODUCT_VIRTUAL_AB_OTA := true、
