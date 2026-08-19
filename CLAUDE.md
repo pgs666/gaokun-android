@@ -5,7 +5,37 @@
 在华为 MateBook E Go（Snapdragon 8cx Gen 3 / sc8280xp，代号 gaokun）上跑原生 AOSP，
 最终目标是能稳定运行 arm64 手游。
 
-**当前阶段：Stage 6 — crDroid 16.0 移植中（M0：构建机已腾空，`repo sync` 进行中）**（每次开工时更新这一行）
+**当前阶段：Stage 6 — ★crDroid 16.0 已完整启动进桌面，解码器 66 个（M2 完成）**（每次开工时更新这一行）
+
+> **★★ Stage 6 M2 已于 2026-08-19 完成：crDroid 16.0 完整启动进桌面。**
+> `sys.boot_completed=1`（t+40s），surfaceflinger/system_server/systemui/launcher3
+> 全部在跑；**解码器 66 个**（含 mp3/aac/flac/amrnb/amrwb/g711）；
+> 铃声 130 + 通知音 92 + 闹铃 45 + UI 音效 25。执行案卷 `docs/stage6-crdroid.md`。
+>
+> **四个真凶（都不是配置写错，是真实的不兼容）**：
+> 1. ★**`media.c2.hal.selection` 默认是 `hidl`** —— 这就是追了两个阶段的
+>    "解码器一个都没有"（#36）。HIDL Codec2 在 Android 15+ 已不可用
+>    （hwservicemanager 被移除）。**与 crDroid 无关，AOSP 16 上同样如此**，
+>    只是真机设备树都会设它。必须走 `PRODUCT_SYSTEM_EXT_PROPERTIES`
+>    （该属性上下文 `codec2_config_prop`，vendor 无权设）。
+> 2. ★**bpffs 的 SELinux 标签**（`patches/0007` 内核补丁）——
+>    主线 bpffs 在 inode 创建时急切赋标签，Android 依赖的 genfscon
+>    惰性路径匹配失效 → ClatCoordinator 逐字比对标签失败 → system_server
+>    崩溃循环。用户态无法修（`chcon` 报 ENOTSUP，因为策略对 bpf 用 genfscon
+>    而非 `fs_use_xattr`）。**这个坑对任何"Android on 新主线内核"都成立。**
+> 3. ★**crDroid 的 `SetSafetyNetProps()`**（`property_service.cpp:1168`）
+>    在解析 cmdline 之前硬写一整张表，把 `ro.debuggable`/`ro.adb.secure`/
+>    `verifiedbootstate`/`flash.locked` 全部盖成"已锁定已验证 user 版"。
+>    这让 `WITH_ADB_INSECURE`、`PRODUCT_SYSTEM_EXT_PROPERTIES`、cmdline
+>    三条路改了都没用，极具迷惑性。开关 `SPOOF_SAFETYNET` 只在 eng 变体关，
+>    故用 `scripts/crdroid-tree-fixes.py` 改默认值（eng 会关 dexpreopt，不可取）。
+> 4. **AOSP 基座必须由设备树自己 inherit**（`full_base.mk`）——
+>    `vendor/lineage/` 下全是补充配置。少了它构建"成功"但产出空壳
+>    （`system.img` 29.8 MB、无 apex/app/services.jar）——**比构建失败更危险**。
+>
+> **还欠的**：s2idle 休眠（`CONFIG_PM_WAKELOCKS` 已开但 init 的 `write` 静默失败，
+> 暂用 `settings put system screen_off_timeout` 顶着）；`adb root` 不生效
+> （M3 的 overlayfs remount 依赖它）；turnip 尚未接（M1 起就是 swangle 软渲染）。
 
 > **★决策（2026-08-19）：硬件使能告一段落，下一步转 crDroid 移植。**
 > 理由：剩下卡住的东西（App/媒体没声音）**不是硬件或内核问题**，
