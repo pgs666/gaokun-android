@@ -41,9 +41,9 @@
 > **音频**：`tinymix` 首次真的编进来了（M3 只是排了队）。硬件路径**实测通**：
 > 291 个混音器控件、路由回读正确（`>AIF1_PB`/`>RX0`/DAC on/BOOST off/PA=12）、
 > `tinyplay` 让 `/proc/asound/card0/pcm1p/sub0/status` 变成 **`state: RUNNING`**
-> 且 DMA 实时消耗。⚠️ 但**框架路径仍未证实**（`Total writes: 0`）——
-> 而且这个 ROM 里**没有任何应用能处理音频**，我试过的每种无头触发都没能让
-> AudioTrack 起来，所以是"未测"而非"坏"。装个播放器放首歌即可定论。
+> 且 DMA 实时消耗。★**2026-08-20 用户实机确认：音频可用（听到声音）**。
+> 框架路径于此确证 —— 此前 `Total writes: 0` 只是因为这个 ROM 里没有任何应用
+> 能处理音频、我试过的每种无头触发都没能让 AudioTrack 起来，属"未测"而非"坏"。
 > ⚠️ `tinymix` 动态链接 `libtinyalsa.so`，放 `/vendor/bin/` 时那个 .so
 > 必须一起进 `/vendor/lib64/`（vendor 命名空间搜不到 system 的那份）。
 >
