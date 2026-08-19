@@ -1269,3 +1269,65 @@ dumpsys activity   : com.miHoYo.GetMobileInfo.MainActivity
 
 **⚠️ 已应用但需重启才能验证** `/vendor/etc/display_settings.xml` 这条路径是否
 真的被读取；运行时那条已实测生效（`ignoreOrientationRequest=false`）。
+
+## 10. ★★主线内核的 CPU 温控是空的（2026-08-20，用户在跑原神时发现）
+
+**用户原话："高锟主线内核温控是坏的"。实测证实，而且比"坏了"更具体：
+GPU 有温控，CPU 完全没有。**
+
+### 实测（`/sys/class/thermal/`）
+15 个 zone 全部 `mode=enabled` 且在读真实温度（游戏编译着色器时 48–53 °C），
+`policy=step_wise`。但 trip point 与 cooling device 的绑定是这样：
+
+| zone | trip point | 绑定的 cooling device |
+|---|---|---|
+| `gpu-thermal` | 85 °C **passive** + 110 °C critical | ✅ `devfreq-3d00000.gpu` |
+| `cpu0-thermal` … `cpu7-thermal` | **只有 110 °C `critical`** | ❌ **一个都没有** |
+| `cluster0-thermal` | **只有 110 °C `critical`** | ❌ 没有 |
+| `mem-thermal` | 90 °C `hot` | ❌ 没有 |
+
+**后果**：CPU 一路满频跑到 110 °C，然后撞 `critical` trip ——
+那不是降频，是**内核紧急关机**，中间没有任何渐进保护。
+这台是**被动散热无风扇**平板，长时间游戏真会撞上。
+
+### 根因在主线，不在我们
+`refs/jhovold-linux/arch/arm64/boot/dts/qcom/sc8280xp.dtsi` 里
+**`cooling-maps` 总共只出现 1 次，就在 `gpu-thermal` 下面**：
+```
+cpu0-thermal {
+        polling-delay-passive = <250>;
+        thermal-sensors = <&tsens0 1>;
+        trips {
+                cpu-crit { temperature = <110000>; hysteresis = <1000>; type = "critical"; };
+        };
+};
+```
+没有 passive trip，也没有 `cooling-maps`。
+→ **所有 sc8280xp 主线设备（含 ThinkPad X13s）都是这样**，不是本项目弄坏的。
+
+### 已上的安全网：`bin/thermal-guard.sh`（用户态 step-wise 温控）
+关键可行性：`cpufreq-cpu0`(max_state **20**) 与 `cpufreq-cpu4`(max_state **17**)
+这两个 cooling device **确实存在**（DTS 的 CPU 节点有 `#cooling-cells = <2>`，
+所以 cpufreq-cooling 驱动注册了），**只是没有任何 thermal zone 接管它们**
+→ 用户态可以直接写 `cur_state`。这比改 `scaling_max_freq` 干净：
+频率映射交给内核的 cpufreq-cooling，退出时归零就完全恢复。
+
+温度→限制百分比（110 °C 是 critical，故 105 °C 以上也只压到 90%，留余量保持可用）：
+`<80→0% | 80–85→10% | 85–90→25% | 90–95→45% | 95–100→65% | 100–105→80% | ≥105→90%`
+每 2 秒最多挪 5%，避免帧率突变。只盯没有 cooling-map 的 zone
+（cpu*/cluster*/mem），**GPU 交给内核自己的 passive trip，不插手**。
+
+**实测验证**（用阈值下移的副本强制触发，验完即恢复）：
+```
+10% → 15% → 20% → 25%            每 2 秒挪 5%，无突变
+25% 时 cpu0=5/20  cpu4=4/17
+      policy0 scaling_max_freq 2438400 → 1881600
+      policy4 scaling_max_freq 2688000 → 2284800
+kill 后 trap 生效：cur_state 归 0，两个 policy 频率全部恢复
+```
+
+### 还欠的根治（下一轮）
+给 CPU thermal zone 加 passive trip + `cooling-maps`，指向已有的
+`cpufreq-cpu0`/`cpufreq-cpu4`。**只需重编 DTB，不必重编内核**
+（可 `dtc -I dtb -O dts` 反编译现有 DTB → 改 → `dtc -I dts -O dtb` 回写）。
+根治之后本脚本就可以退役。

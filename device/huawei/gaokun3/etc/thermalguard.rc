@@ -1,0 +1,10 @@
+# 用户态 CPU 温控（主线 DTS 的 CPU thermal zone 没有 cooling-map，见脚本注释）
+service thermalguard /vendor/bin/thermal-guard.sh
+    class core
+    user root
+    group root system
+    seclabel u:r:shell:s0
+    disabled
+
+on property:sys.boot_completed=1
+    start thermalguard

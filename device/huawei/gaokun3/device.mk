@@ -328,6 +328,19 @@ PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/bin/smmu-nostall.sh:$(TARGET_COPY_OUT_VENDOR)/bin/smmu-nostall.sh \
     $(LOCAL_PATH)/etc/smmustall.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/smmustall.rc
 
+# ★ 用户态 CPU 温控 —— 补主线 DTS 的缺口（2026-08-20 M4 实测发现）。
+# 主线 sc8280xp.dtsi 里总共只有一个 cooling-maps，就在 gpu-thermal 下面；
+# cpu0..cpu7-thermal / cluster0-thermal 只有一条 110C 的 critical trip，
+# 既无 passive trip 也没绑任何 cooling device →
+# CPU 会一路满频到 110C 然后被内核紧急关机，中间没有渐进降频。
+# 这台是被动散热无风扇平板，长时间游戏会真的撞上。
+# 根治要改 DTS（给 CPU zone 加 passive trip + cooling-maps，可只重编 DTB）；
+# 在那之前用这个脚本接管 cpufreq-cpu0/cpu4 两个 cooling device。
+# 完整机制与实测数据见 bin/thermal-guard.sh 的注释。
+PRODUCT_COPY_FILES += \
+    $(LOCAL_PATH)/bin/thermal-guard.sh:$(TARGET_COPY_OUT_VENDOR)/bin/thermal-guard.sh \
+    $(LOCAL_PATH)/etc/thermalguard.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/thermalguard.rc
+
 # turnip 调试旗标加载器（快速迭代机制，见 docs/stage5-freedreno.md）
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/bin/tu_debug_loader.sh:$(TARGET_COPY_OUT_VENDOR)/bin/tu_debug_loader.sh
