@@ -459,3 +459,144 @@ PRODUCT_SYSTEM_EXT_PROPERTIES += ro.debuggable=1  # 我们自己补，M3 要 adb
 > `BPF_PROG_TYPE_SCHED_CLS` 在 `include/linux/bpf_types.h` 里只受 `#ifdef CONFIG_NET`
 > 保护 —— **加载**这类程序不需要 `NET_CLS_BPF`，那个选项管的是往 tc filter 上**挂载**。
 > 照那个假设去重编内核就是几十分钟白费。
+
+## ★★ M2 的三个真凶（都不是配置写错，是真实的不兼容）
+
+### 真凶一：bpffs 的 SELinux 标签 —— 主线内核 vs Android
+
+**症状**：system_server 崩溃循环，开不进桌面，`/data/tombstones/` 一次开机 100 个。
+
+```
+#01 register_com_android_server_connectivity_ClatCoordinator()+716
+#08 com.android.server.NetworkStatsServiceInitializer.<init>
+#17 com.android.server.SystemServer.startOtherServices     → SIGABRT
+
+E jniClatCoordinator: context of '/sys/fs/bpf/net_shared' is
+    'u:object_r:fs_bpf:s0' != 'u:object_r:fs_bpf_net_shared:s0'
+```
+
+**注意这是逐字比对标签字符串，不是权限检查 —— SELinux permissive 完全救不了。**
+
+链路上其余环节全部正常（逐条实测）：五个 clat BPF 程序/映射**加载成功并 pin 好了**
+（`NetBpfLoad` 日志为证），`plat_sepolicy.cil` 里 11 条 `genfscon bpf` 齐全。
+
+**机制**：Android 靠 genfscon 给 bpffs 子目录打标签，而 genfscon 是【惰性】标注
+（inode 首次访问时按路径匹配）。但主线内核的 bpffs（`kernel/bpf/inode.c`）在
+`bpf_mkdir` / `bpf_mkobj` / `bpf_mklink` 三处都调用
+`security_inode_init_security()` —— **创建时就急切赋标签、从父目录继承**，
+genfscon 那 11 条形同虚设。
+
+对照实验证明不是 genfscon 整体失效：
+
+| 路径 | 实测标签 | 结论 |
+|---|---|---|
+| `/proc/sysrq-trigger` | `proc_sysrq` | ✅ 子路径匹配正常 |
+| `/sys/kernel/tracing` | `debugfs_tracing_debug` | ✅ |
+| `/sys/fs/bpf/*` | `fs_bpf`（全部） | ❌ 只有 bpffs |
+
+**用户态修不了**：`chcon` 报 `ENOTSUP`。原因是 `selinux_inode_setxattr()` 只在
+超级块带 `SBLABEL_MNT`（即策略对该 fs 用 `fs_use_xattr`）时才允许写
+`security.selinux`，而 Android 对 bpf 用的是 genfscon。
+—— 我一度写了 `bin/bpf-relabel.sh` 挂在 init 的 `bpf-progs-loaded` 触发器上，
+服务确实跑了（avc 日志里有 `comm="bpf-relabel.sh"`），但 chcon 全部失败。
+**这个方案从原理上就不成立。**
+
+**修法**：`patches/0007-*` —— 把三处调用用编译期常量
+`BPF_FS_EAGER_SECURITY_INIT=0` 短路（保留调用表达式在 `?:` 的未取分支，
+免得 `bpf_fs_initxattrs` 变成未使用函数触发 `-Werror`）。
+幂等脚本 `scripts/kernel-bpffs-genfscon-fix.py`。
+
+**结果**：标签变成 `u:object_r:fs_bpf_net_shared:s0`，
+**crDroid 首次完整启动**（`sys.boot_completed=1`，t+40s，
+surfaceflinger / system_server / systemui / launcher3 全部在跑）。
+
+> 这个坑对任何"Android on 新主线内核"的项目都成立，值得回赠社区。
+
+### 真凶二：crDroid 的 SafetyNet 属性伪装
+
+`system/core/init/property_service.cpp:1168` 的 `SetSafetyNetProps()` 里有一张
+硬编码表（含 `oplusboot.verifiedbootstate` 这类非 AOSP 键），
+在**解析 kernel cmdline 之前**强制写入。源码注释直言不讳：
+
+> Report a valid verified boot chain to make Google SafetyNet integrity checks
+> pass. This needs to be done before parsing the kernel cmdline as these
+> properties are read-only and will be set to invalid values with androidboot
+> cmdline arguments.
+
+实机 getprop 逐条确认被它盖掉的值：
+
+| 属性 | 我们设的 | 它强制的 |
+|---|---|---|
+| `ro.boot.verifiedbootstate` | orange（cmdline） | **green** |
+| `ro.boot.flash.locked` | 0（cmdline） | **1** |
+| `ro.boot.veritymode` | disabled（cmdline） | **enforcing** |
+| `ro.debuggable` | 1（system_ext） | **0** |
+| `ro.adb.secure` | 0（WITH_ADB_INSECURE） | **1** |
+
+这一条解释了为什么 `WITH_ADB_INSECURE`、`PRODUCT_SYSTEM_EXT_PROPERTIES`、
+kernel cmdline **三条路改了都没用** —— 产物里的 build.prop 明明是对的，
+极具迷惑性，查了很久。
+
+对本项目致命：`ro.debuggable=0` + 非 orange ⇒ `adb root` / `adb remount` 全废，
+而 M3 部署 turnip 完全依赖 overlayfs remount。
+
+开关是 `SPOOF_SAFETYNET`（`system/core/init/Android.bp:133`），
+上游**只在 eng 变体关它**（`product_variables.eng`）。但 eng 会关掉 dexpreopt、
+首次开机全靠 JIT，本机跑 swangle 软渲染受不了。
+故用 `scripts/crdroid-tree-fixes.py` 把两处默认值改成 0（幂等）。
+
+**结果**：`verifiedbootstate=orange`、`flash.locked=0`、`ro.debuggable=1`、
+`ro.adb.secure=0` 全部为真，adb 免授权可用。
+
+### 真凶三：s2idle 休眠 —— 排查效率的最大杀手
+
+设备闲置 45–60 秒就
+
+```
+I PM      : suspend entry (s2idle)
+```
+
+然后醒不来（EC 挂起坑，CLAUDE.md 从 Stage 3 就预言了）。
+**一度被误判成"system_server 崩溃导致重启"**——实际 logcat 最后一行就是它。
+每次上机只有 45 秒窗口，这轮的低效大半来自这里。
+
+★ 根因是内核**没开 `CONFIG_PM_WAKELOCKS`**，`/sys/power/wake_lock` 不存在。
+
+> ⚠️ 我一度从 `shell: can't create /sys/power/wake_lock: Permission denied`
+> 推断"文件存在只是没权限"——**这是错的**：往 sysfs 里创建不存在的文件
+> 同样报 Permission denied。判据应该是直接 `ls`。
+
+修法两处：
+- `scripts/kernel-config-android.sh` 加 `--enable PM_WAKELOCKS` 并进 `MUST_Y` 断言
+- `init.gaokun3.rc` 的 `on early-init` 写 `/sys/power/wake_lock gaokun3_nosuspend`
+  （无条件、与是否插电无关；`svc power stayon` 只在插电时有效）
+
+无需重建的止血（当场生效）：
+```
+settings put system screen_off_timeout 2147483647
+svc power stayon true
+```
+
+## 仍未解决：MediaCodecList 依然为空
+
+crDroid 完整启动后 `dumpsys media.player` 的解码器数**仍是 0**，
+与 AOSP 时代同一症状 —— 说明**不是 crDroid 特有**，是本设备/内核层面的问题。
+
+断点仍在 `Codec2Client::CacheServiceNames()`（`client.cpp:2636`）的
+`AServiceManager_forEachDeclaredInstance()` 返回空。已排除：
+
+- 服务确实注册（`service list` 有 `…IComponentStore/software`）
+- framework VINTF 确实有该声明（`vintf fm` 列得出来，带 `updatable-via-apex`）
+- servicemanager 的 `isVintfDeclared` 本身工作正常
+  （logcat 里 vold/keymint/gatekeeper 都有 "Found … in … VINTF manifest"）
+- `getVintfInstances()` 的 package/iface 拆分与
+  `HalManifest::getAidlInstances()` 的过滤条件（`ExclusiveTo::EMPTY`、版本 0）
+  逻辑上都应匹配
+
+**主嫌疑（待验证）**：`CacheServiceNames()` 的结果是**进程内静态缓存、只查一次**；
+framework 那条声明带 `updatable-via-apex="com.android.media.swcodec"`，
+若查询早于 apexd/VINTF 更新，就永远为空。
+
+**当前尝试**：在设备 manifest（`device/huawei/gaokun3/manifest.xml`）里再声明一次
+—— 它随 `/vendor` 在 first-stage 挂载，没有 apex 依赖，时序上更早。
+若仍为 0，下一步给 `Codec2Client` 加日志或直接跳过 declared 检查。
