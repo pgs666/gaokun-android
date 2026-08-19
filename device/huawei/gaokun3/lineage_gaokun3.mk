@@ -148,6 +148,22 @@ PRODUCT_ADB_KEYS := device/huawei/gaokun3/adb_keys
 $(call inherit-product, vendor/lineage/config/common_full_tablet_wifionly.mk)
 
 # 设备配置（固件、init rc、HAL、图形、WiFi、音频 —— Stage 2–5 的全部成果）
+# ★ Virtual A/B（M6）。launch.mk 而不是 compression.mk：
+# 内核没有 CONFIG_DM_USER，压缩快照用不了（理由见 BoardConfig.mk 的 A/B 段）。
+# launch.mk 只做三件事：PRODUCT_VIRTUAL_AB_OTA := true、
+# ro.virtual_ab.enabled=true、装 e2fsck_ramdisk。
+$(call inherit-product, $(SRC_TARGET_DIR)/product/virtual_ab_ota/launch.mk)
+
+# ★ boot_control HAL —— 必须用我们自己那个，不能用 default。
+# default 只把槽位写进 misc，然后指望 bootloader 去读；systemd-boot 不认识
+# 那个结构。我们这个包住同一个 libboot_control，额外把槽位镜像进 ESP 的
+# loader.conf。完整理由见 device/huawei/gaokun3/boot_control/Android.bp。
+PRODUCT_PACKAGES += \
+    android.hardware.boot-service.gaokun3 \
+    update_engine \
+    update_engine_sideload \
+    update_verifier
+
 $(call inherit-product, device/huawei/gaokun3/device.mk)
 
 # 动态分区（super）。这是 product 变量，必须设在这里而不是 BoardConfig.mk

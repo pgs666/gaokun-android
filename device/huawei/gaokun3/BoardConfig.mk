@@ -89,8 +89,38 @@ TARGET_COPY_OUT_PRODUCT     := product
 
 BOARD_FLASH_BLOCK_SIZE := 262144
 
-# 没有 A/B，没有 fastboot，不做 OTA
-AB_OTA_UPDATER := false
+# --------------------------------------------------------- A/B OTA（M6）
+# ★ 这里曾经是 `AB_OTA_UPDATER := false`，注释写着"没有 A/B，没有 fastboot，
+#   不做 OTA"。前半句现在不成立了：**没有 fastboot 并不妨碍 A/B**。
+#
+# 走的是 **Virtual A/B**：super 里仍然只存【一份】动态分区，更新写成
+# userdata 上的 COW 快照，切槽后再合并。选它而不是传统 A/B 的理由：
+#   * 传统 A/B 要求 super 能放下两份。本机每槽镜像合计 2.53 GiB
+#     （system 1022 + system_ext 944 + product 505 + vendor 241 MB），
+#     12 GiB 的 super 其实放得下 —— 但 Virtual A/B 连扩都不用扩，
+#     **分区布局一个字节都不用动**，首批测试者将来不必重刷。
+#   * 这是 AOSP 16 的主路：device/google/cuttlefish 与
+#     device/linaro/dragonboard 都走这条（实名核实）。
+#   * 快照落在 userdata，本机 /data 有 294 GiB 余量。
+#
+# ⚠️ 内核前提（已实测 ~/gaokun/kernel-out/.config）：
+#     CONFIG_DM_SNAPSHOT=y  ✅ Virtual A/B 的基础
+#     CONFIG_DM_USER        ✗  没有 → **不能用压缩快照**，
+#                              故不 inherit compression.mk，只用 launch.mk。
+#
+# ⚠️ PRODUCT_VIRTUAL_AB_OTA 是 **product** 变量，不能写在这里
+#    （同本文件上面 PRODUCT_USE_DYNAMIC_PARTITIONS 那条坑）。
+#    它由 lineage_gaokun3.mk 里 inherit 的
+#    $(SRC_TARGET_DIR)/product/virtual_ab_ota/launch.mk 设置。
+AB_OTA_UPDATER := true
+AB_OTA_PARTITIONS += \
+    system \
+    system_ext \
+    product \
+    vendor
+
+# 本机没有 boot 分区（内核/ramdisk 是 ESP 上的文件，由 systemd-boot 加载），
+# 所以 boot 不在 AB_OTA_PARTITIONS 里 —— 换内核走带外流程，见 docs/。
 
 # ----------------------------------------------------- Stage 3: 图形栈
 # 模板：device/linaro/dragonboard/shared/graphics/（db845c = 树内同款高通主线）。

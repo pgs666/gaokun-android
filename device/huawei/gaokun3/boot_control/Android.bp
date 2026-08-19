@@ -1,0 +1,53 @@
+//
+// boot_control HAL for the Huawei MateBook E Go (gaokun3).
+//
+// Why a custom one instead of android.hardware.boot-service.default:
+//
+//   The default service is a thin AIDL wrapper over libboot_control, which
+//   keeps the standard `bootloader_control` struct inside the `misc`
+//   partition and then *relies on the bootloader* to read it and boot the
+//   active slot. Every normal Android bootloader (ABL, U-Boot, LK) knows
+//   that struct.
+//
+//   This machine boots UEFI + systemd-boot, which has never heard of it.
+//   systemd-boot picks its entry from `default` in loader.conf on the ESP.
+//
+//   So we keep libboot_control exactly as-is — misc stays the source of
+//   truth, `bootctl` and update_engine keep working unmodified — and simply
+//   mirror the slot change into loader.conf whenever it happens. See
+//   EspSlot.cpp for the mirroring, and BootControl.cpp for where it hooks in.
+//
+
+cc_binary {
+    name: "android.hardware.boot-service.gaokun3",
+    relative_install_path: "hw",
+    vendor: true,
+    defaults: ["libboot_control_defaults"],
+
+    srcs: [
+        "main.cpp",
+        "BootControl.cpp",
+        "EspSlot.cpp",
+    ],
+
+    init_rc: ["android.hardware.boot-service.gaokun3.rc"],
+    vintf_fragment_modules: ["android.hardware.boot-service.gaokun3.xml"],
+
+    stl: "c++_static",
+    shared_libs: [
+        "libbinder_ndk",
+        "liblog",
+    ],
+    static_libs: [
+        "android.hardware.boot@1.1",
+        "android.hardware.boot-V1-ndk",
+        "libbase",
+        "libboot_control",
+    ],
+}
+
+vintf_fragment {
+    name: "android.hardware.boot-service.gaokun3.xml",
+    src: "android.hardware.boot-service.gaokun3.xml",
+    vendor: true,
+}

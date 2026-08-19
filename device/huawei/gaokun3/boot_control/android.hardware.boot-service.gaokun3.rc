@@ -1,0 +1,6 @@
+# boot_control HAL. class early_hal so it is up before update_engine and
+# before update_verifier runs at the end of a slot switch.
+service vendor.boot-gaokun3 /vendor/bin/hw/android.hardware.boot-service.gaokun3
+    class early_hal
+    user root
+    group root
