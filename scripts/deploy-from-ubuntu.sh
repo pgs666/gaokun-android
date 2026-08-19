@@ -30,6 +30,8 @@ MID=8a29534fa802480d9fbb71aa18c01d7b
 ESP=/boot/efi/$MID/android
 SUPER_PART=/dev/nvme0n1p8
 MODE=${1:-all}
+# ENTRY 提前定义：flash_boot 要靠它找到条目实际引用的文件名
+ENTRY=${ENTRY:-$MID-crdroid.conf}
 
 pull() {  # pull <远端文件> <本地目标>
   echo "拉取 $(basename "$1") …"
@@ -46,19 +48,39 @@ flash_super() {
 }
 
 flash_boot() {
-  pull "$OUT/../../../../gaokun/kernel-out/arch/arm64/boot/Image" /tmp/Image 2>/dev/null || \
-    pull "~/gaokun/kernel-out/arch/arm64/boot/Image" /tmp/Image
+  # ⚠️⚠️ 目标文件名【必须从 BLS 条目里读】，不能写死（2026-08-20 M5 发现）。
+  #
+  # 这个函数原先硬编码写 $ESP/Image 与 $ESP/ramdisk.img —— 那是【旧 AOSP】
+  # 条目 android.conf 用的文件名。crDroid 的 crdroid.conf 用的是
+  # Image-kb23 与 ramdisk-crdroid.img。于是 `deploy-from-ubuntu.sh all`
+  # 会把新内核/新 ramdisk 写到【没人读的文件】上，然后打印"已更新"。
+  # 结果就是 M3 那个坑的镜像版：一切显示成功，实机跑的却是旧内核。
+  # 改成从条目文件里解析 linux/initrd/devicetree 三行，永远不会漂。
+  local conf="/boot/efi/loader/entries/$ENTRY"
+  [ -f "$conf" ] || { echo "找不到启动项 $conf"; exit 1; }
+  local k_rel i_rel d_rel
+  k_rel=$(awk '$1=="linux"      {print $2}' "$conf")
+  i_rel=$(awk '$1=="initrd"     {print $2}' "$conf")
+  d_rel=$(awk '$1=="devicetree" {print $2}' "$conf")
+  local K="/boot/efi$k_rel" I="/boot/efi$i_rel" D="/boot/efi$d_rel"
+  echo "条目 $ENTRY 实际读取的文件："
+  echo "  内核   $K"
+  echo "  ramdisk $I"
+  echo "  DTB    $D"
+
+  pull "~/gaokun/kernel-out/arch/arm64/boot/Image" /tmp/Image
   pull "~/gaokun/kernel-out/arch/arm64/boot/dts/qcom/sc8280xp-huawei-gaokun3.dtb" /tmp/gk3.dtb
   pull "$OUT/ramdisk.img" /tmp/ramdisk.img
-  sudo -n cp "$ESP/Image" "$ESP/Image.bak-prev" 2>/dev/null || true
-  sudo -n cp "$ESP/ramdisk.img" "$ESP/ramdisk.img.bak-prev" 2>/dev/null || true
-  sudo -n cp /tmp/Image "$ESP/Image"
-  sudo -n cp /tmp/gk3.dtb "$ESP/sc8280xp-huawei-gaokun3.dtb"
-  sudo -n cp /tmp/ramdisk.img "$ESP/ramdisk.img"
-  # LOG 启动项用的是 ramdisk-debug.img，同步一份，免得两个入口行为不一致
-  [ -f "$ESP/ramdisk-debug.img" ] && sudo -n cp /tmp/ramdisk.img "$ESP/ramdisk-debug.img"
+
+  for f in "$K" "$I" "$D"; do
+    [ -f "$f" ] && sudo -n cp "$f" "$f.bak-prev"
+  done
+  sudo -n cp /tmp/Image       "$K"
+  sudo -n cp /tmp/ramdisk.img "$I"
+  sudo -n cp /tmp/gk3.dtb     "$D"
   sync
-  echo "内核 / DTB / ramdisk 已更新（ramdisk $(stat -c%s /tmp/ramdisk.img) 字节）"
+  echo "内核 / DTB / ramdisk 已写入【条目实际引用的路径】"
+  echo "  ⚠️ 起来后必须核对：adb shell uname -a 的编译时间要与本次内核一致"
 }
 
 flash_rollback() {
@@ -102,7 +124,6 @@ esac
 #   adb shell setprop service.adb.root 1 && adb root
 # 然后 `mount -t vfat -o rw /dev/block/sda1 /mnt/usb` 直接改 ESP 上的
 # loader.conf（引导 ESP 是 U 盘 = sda1，不是内置盘的 nvme0n1p1）。
-ENTRY=${ENTRY:-$MID-crdroid.conf}
 sudo -n bootctl set-oneshot "$ENTRY" && echo "下次启动 → $ENTRY（一次性，默认仍是 Ubuntu）"
 echo
 echo "现在重启：sudo systemctl reboot"
