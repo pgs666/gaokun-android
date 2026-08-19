@@ -1529,3 +1529,36 @@ Normal mixer raw underrun counters: partial=0 empty=0
 
 完整 super 也已重编（`M_RC=0` / `SUPER_RC=0`，sha256 `8326cb6c…`，
 压缩包在宿主机上），随时可刷以消除 overlay 漂移。
+
+## 13. ⚠️ 未完成项：镜像里还缺 4 个修复（overlay 漂移，2026-08-20）
+
+**别刷 2026-08-19 19:01 那个 `super.img`（sha256 `8326cb6c…`）—— 会造成回退。**
+
+实测 `/mnt/scratch/overlay/vendor/upper` 里只活在 overlay 的文件：
+
+| 文件 | 修的是什么 | 在新 super 里？ |
+|---|---|---|
+| `/vendor/apex/com.android.hardware.audio.apex` | tinyalsa sw_params（音频卡顿，§12） | ✅ 在（tinyalsa_new 是直接在 VM 源码树上改的） |
+| `/vendor/etc/primary_audio_policy_configuration.xml` | 删 MMAP（游戏完全没声音，§11） | ❌ **不在** |
+| `/vendor/etc/display_settings.xml` | 横屏（§9） | ❌ **不在** |
+| `/vendor/bin/thermal-guard.sh` | CPU 温控安全网（§10） | ❌ **不在** |
+| `/vendor/etc/init/thermalguard.rc` | 同上的 init 服务 | ❌ **不在** |
+
+**原因（流程问题，值得记住）**：我早先只用 `scp` 单独同步了
+`init.gaokun3.rc` / `bin/audio-route.sh` / `bin/smmu-nostall.sh` / `device.mk`，
+而上面那 4 个文件是**之后**才在宿主机上新建/修改的，从没同步过去。
+于是"构建成功、产物校验通过"却**静静地少了 4 个修复** ——
+这和 §7 的"sha256 对得上 ≠ 刷对了"是同一类陷阱：
+**校验只能证明搬对了字节，证明不了内容是最新的。**
+
+> **流程修正**：以后同步设备树一律 `rsync -a device/huawei/gaokun3/`
+> **整目录**（`--exclude` 掉不需要的），不要再 scp 单个文件。
+> 并在构建后核对产物里的关键文件，例如：
+> ```
+> grep -c allow_suspend  out/.../vendor/etc/init/hw/init.gaokun3.rc
+> ls out/.../vendor/etc/display_settings.xml out/.../vendor/bin/thermal-guard.sh
+> grep -c mmap_no_irq_out out/.../vendor/etc/primary_audio_policy_configuration.xml   # 应为 0
+> ```
+
+**下一轮开工第一件事**：rsync 整个设备树 → 重编 → 核对上面 4 个文件 → 再刷。
+在那之前 overlay 顶着，功能都是好的，但**重刷 userdata / 清 scratch 会全部丢失**。
