@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  VINTF device manifest -- Huawei MateBook E Go (gaokun3)
+  VINTF device manifest — Huawei MateBook E Go (gaokun3)
 
   target-level 就是 Shipping FCM Version。缺了它构建会在最后的
   check_vintf 阶段失败：
@@ -9,9 +9,42 @@
   202504 的依据（均来自 AOSP 16 源码，不是猜的）：
     system/libvintf/include/vintf/Level.h        B = 202504   （B = Baklava = Android 16）
     out/soong/soong.aosp_gaokun3.variables       "RELEASE_BOARD_API_LEVEL": "202504"
-
-  HAL 仍然一个都不声明 —— 声明了却没实现，VINTF 校验一样会失败。
-  Stage 3/4 每落地一个 HAL 再往这里补一条。
 -->
 <manifest version="1.0" type="device" target-level="202504">
+
+    <!--
+      ★ 软件 Codec2 服务：从【设备】manifest 声明，绕开 framework 那条。
+
+      症状（AOSP 16 与 crDroid 16.0 上完全一致，实机复现两次）：
+          I Codec2Client: No Codec2 services declared in the manifest.
+          D MediaCodecList: ignored failed builder
+          → dumpsys media.player 的解码器列表为空 → App 一律
+            "Failed to create audio/mpeg decoder"
+
+      已排除的环节（全部实测，见 docs/stage6-crdroid.md）：
+        * swcodec APEX isActive，36 个 libcodec2_soft_*.so 齐全
+        * 服务确实注册：service list 有
+          android.hardware.media.c2.IComponentStore/software
+        * framework VINTF 里确实有这条声明（vintf fm 列得出来）
+        * media_codecs.xml 在 APEX 和 /vendor/etc 两处都在
+        * ro.vendor.api_level=202504 → 走 AIDL 分支
+
+      断点在 Codec2Client::CacheServiceNames()（client.cpp:2636）调用
+      AServiceManager_forEachDeclaredInstance() 返回空 —— 即 servicemanager
+      的 declared 集里没有它（registered ≠ declared）。
+
+      主嫌疑是时序：那条声明在 framework manifest 里且带
+      updatable-via-apex="com.android.media.swcodec"，而 CacheServiceNames()
+      的结果是【静态缓存、只查一次】，跑在 apexd 就绪之前就永远是空的。
+
+      设备 manifest 在 first-stage 就随 /vendor 挂载，没有 apex 依赖，
+      时序上更早 —— 所以在这里再声明一次。
+      版本号 1 来自 frameworks/av/media/mediaserver/manifest_media_c2_software.xml。
+    -->
+    <hal format="aidl">
+        <name>android.hardware.media.c2</name>
+        <version>1</version>
+        <fqname>IComponentStore/software</fqname>
+    </hal>
+
 </manifest>

@@ -31,6 +31,16 @@ OUT="${1:?用法: $0 <kernel-out-dir>}"
     --enable USB_CONFIGFS_MASS_STORAGE --enable USB_CONFIGFS_ECM \
     --enable USB_CONFIGFS_RNDIS --enable USB_CONFIGFS_EEM \
     --enable OVERLAY_FS \
+# ★ Android 的挂起框架依赖 /sys/power/wake_lock（CONFIG_PM_WAKELOCKS）。
+#   缺了它 SystemSuspend 退化到 wakeup_count 模式，而本机 s2idle 恢复是坏的
+#   （EC 挂起坑，Stage 3 起的已知问题），表现为：闲置 45–60 秒后
+#       I PM : suspend entry (s2idle)
+#   然后 adb/网络全断、醒不来，只能断电重启。
+#   2026-08-19 排查 crDroid 时，这个坑把每次上机窗口压到 45 秒，
+#   还一度被误判成"system_server 崩溃导致重启"。
+#   有了 wake_lock 接口，init 就能在 early-init 无条件持锁挡住自动挂起
+#   （见 device/huawei/gaokun3/init.gaokun3.rc），且与是否插电无关。
+    --enable PM_WAKELOCKS \
     \
     `# —— cgroup v1：6.12+ 拆分后默认关。Android cgroups.json 要求 cpuset 走 v1，` \
     `#    缺了会 SetupCgroups 失败 -> bootstrap-apexd-failed 复位（findings 第 8 节）——` \
@@ -159,7 +169,7 @@ echo "== 跑 olddefconfig（ARCH=arm64 必带，否则 arm64 符号会被删光�
 make ARCH=arm64 O="$OUT" olddefconfig >/dev/null || exit 1
 
 MUST_Y="
-BLK_DEV_DM SECURITY_SELINUX EROFS_FS F2FS_FS DM_VERITY
+BLK_DEV_DM SECURITY_SELINUX EROFS_FS F2FS_FS DM_VERITY PM_WAKELOCKS
 CFG80211 MAC80211 ATH11K ATH11K_PCI PCI_PWRCTRL_PWRSEQ QRTR QRTR_SMD
 BT BT_QCA BT_HCIUART BT_HCIUART_QCA BT_RFCOMM BT_HIDP UHID
 PINCTRL_LPASS_LPI PINCTRL_SC8280XP_LPASS_LPI SC_LPASSCC_8280XP

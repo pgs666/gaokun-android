@@ -4,6 +4,28 @@ on early-init
     # 本机没有串口，内核日志只能靠 dmesg / efi_pstore
     write /proc/sys/kernel/printk "7 4 1 7"
 
+# ═══════════════════ 挡住 s2idle 休眠（Stage 3 起的已知坑）═══════════════════
+# 症状：闲置约 45–60 秒后内核打印
+#     I PM      : suspend entry (s2idle)
+# 然后【醒不来】—— adb 断、网络断，只能断电重启（华为 EC 的挂起/恢复问题，
+# CLAUDE.md 从 Stage 3 就预言了这一坑，至今未根治）。
+#
+# 2026-08-19 在 crDroid 上再次咬人：每次上机只有 45 秒排查窗口，
+# 一度把它误判成"system_server 崩溃导致重启"——实际日志最后一行就是
+# suspend entry，不是崩溃。
+#
+# 为什么用内核 wakelock 而不是 `svc power stayon true`：
+#   stayon 走的是 stay_on_while_plugged_in，只在【插电】时有效；
+#   /sys/power/wake_lock 是 CONFIG_PM_WAKELOCKS 的用户态接口，
+#   init 以 root 写入后无条件阻止自动挂起，与供电状态无关。
+#   （设备上该文件存在——shell 写它报 Permission denied 而不是
+#     No such file，说明内核有这项能力。）
+#
+# ⚠️ 这是【开发期】措施：代价是永不休眠、耗电。
+#    s2idle 恢复修好之后，删掉这三行即可（或改成按属性开关）。
+on early-init
+    write /sys/power/wake_lock gaokun3_nosuspend
+
 # ⚠️ 这里绝不能自己挂 binderfs —— AOSP 16 的 init.rc 已原生处理
 # （挂 /dev/binderfs + 建 /dev/binder 等符号链接）。
 # 再挂一次会创建【第二个】binderfs 实例盖在上面：每个 binderfs 挂载是
