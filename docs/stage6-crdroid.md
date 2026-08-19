@@ -600,3 +600,80 @@ framework 那条声明带 `updatable-via-apex="com.android.media.swcodec"`，
 **当前尝试**：在设备 manifest（`device/huawei/gaokun3/manifest.xml`）里再声明一次
 —— 它随 `/vendor` 在 first-stage 挂载，没有 apex 依赖，时序上更早。
 若仍为 0，下一步给 `Codec2Client` 加日志或直接跳过 declared 检查。
+
+## ★★★ M2 收官：crDroid 完整启动，解码器 66 个
+
+### 最终验收（2026-08-19 实机）
+
+```
+sys.boot_completed = 1               （t+40s）
+进程：surfaceflinger / system_server / systemui / launcher3 全在
+/sys/fs/bpf/net_shared  →  u:object_r:fs_bpf_net_shared:s0      ← 内核补丁生效
+ro.boot.verifiedbootstate = orange   ro.boot.flash.locked = 0    ← SafetyNet 伪装已关
+ro.debuggable = 1                    ro.adb.secure = 0           ← adb 免授权
+media.c2.hal.selection = aidl
+Codec2Client: Available Codec2 services: "software" "software" "__ApexCodecs__"
+dumpsys media.player 的 c2.android.* 条目：66
+  含 c2.android.mp3.decoder / aac / flac / amrnb / amrwb / g711
+product/media/audio/：130 铃声 + 92 通知音 + 45 闹铃 + 25 UI 音效
+```
+
+`screenrecord` 不再报 `unable to create video/avc codec instance`。
+
+### ★ #36 的最终定论
+
+追了两个阶段的"解码器一个都没有"，根因是**一行没设的属性**：
+
+```cpp
+// frameworks/av/media/codec2/hal/common/HalSelection.cpp:57
+std::string selection = GetProperty("media.c2.hal.selection", "hidl");
+if (selection == "aidl") return true;
+else if (selection == "hidl") return false;
+```
+
+**默认 `hidl`**，而 HIDL 的 Codec2 在 Android 15+ 已彻底不可用
+（hwservicemanager 被移除）。实机一句话点破：
+
+```
+I HidlServiceManagement: Cannot list manifest for
+    android.hardware.media.c2@1.0::IComponentStore without hwservicemanager
+```
+
+→ `Codec2Client::CacheServiceNames()` 空 → `MediaCodecList` 空 →
+App "Failed to create audio/mpeg decoder"。
+
+**与 crDroid 无关** —— AOSP 16 上同样如此，只是真机设备树都会设它。
+所以 #36 最初"产品配置缺口"的直觉是对的，缺的不是 `media_codecs.xml`，
+而是这个 HAL 选择属性。
+
+⚠️ 必须走 `PRODUCT_SYSTEM_EXT_PROPERTIES`：该属性上下文是
+`codec2_config_prop`，vendor context 无权设置。
+
+### 排查路上被推翻的三个自己的假设（都值得记住）
+
+1. **"clat 的 schedcls 程序需要 CONFIG_NET_CLS_BPF"** —— 错。
+   `BPF_PROG_TYPE_SCHED_CLS` 在 `include/linux/bpf_types.h` 里只受
+   `#ifdef CONFIG_NET` 保护；`NET_CLS_BPF` 管的是往 tc filter 上**挂载**。
+   照这个假设去重编内核就是几十分钟白费。
+2. **"chcon 能把 bpffs 标签改回来"** —— 错。`selinux_inode_setxattr()` 只在
+   超级块带 `SBLABEL_MNT`（策略用 `fs_use_xattr`）时才允许写 `security.selinux`，
+   Android 对 bpf 用 genfscon，所以用户态**从原理上**改不了。
+   写好的 `bin/bpf-relabel.sh` 服务确实跑了（avc 日志可证），但 chcon 全部 ENOTSUP。
+3. **"c2 声明的时序问题，放进设备 manifest 就好"** —— 错。
+   开机很久之后新起的 mediaserver 依然报 "No Codec2 services declared"，
+   证明不是时序；而且设备 manifest 那条加了也没用（反而让服务列了两次）。
+
+### 仍未解决 / 下一步
+
+- **s2idle 休眠**：`CONFIG_PM_WAKELOCKS` 已开、`/sys/power/wake_lock` 已存在，
+  但 init 的 `write` 无论 `on early-init` 还是 `on init` 都没写进去
+  （文件内容为空，logcat 也没有相关报错）。
+  临时办法：`settings put system screen_off_timeout 2147483647` + `svc power stayon true`
+  （存在 /data，清 userdata 后需重设）。
+  下一步：查 init 的 `write` 为何静默失败（可能要 `on property:sys.boot_completed=1`
+  或改成一个 oneshot 服务）。
+- **`adb root` 不生效**：`ro.debuggable=1` 但 `adb root` 无输出、`id` 仍是 shell。
+  怀疑 crDroid 对 adbd 有额外限制，待查。M3 的 overlayfs remount 依赖它。
+- **设备 manifest 里那条 c2 声明现在是多余的**（导致服务被列两次），可以删。
+- 首次开机应用未就绪（`Could not find provider: media`、没有注册 audio/mpeg 的
+  Activity），完整播放验证要等 SetupWizard 走完。
