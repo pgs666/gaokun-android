@@ -5,7 +5,7 @@
 在华为 MateBook E Go（Snapdragon 8cx Gen 3 / sc8280xp，代号 gaokun）上跑原生 AOSP，
 最终目标是能稳定运行 arm64 手游。
 
-**当前阶段：Stage 6 M5 — ★M4 全部修复已编进镜像并实机验收；原神实测可玩；传感器判死**（每次开工时更新这一行）
+**当前阶段：Stage 6 M5 — ★修复已固化进镜像；原神可玩；传感器判死；引导链已搬进内置盘（待拔盘实测）**（每次开工时更新这一行）
 
 > **★★ Stage 6 M5（2026-08-20）：M4 的成果全部固化进镜像 + 传感器判死。**
 >
@@ -47,13 +47,22 @@
 > 至今没有任何 sc8280xp 设备做到，X13s 也没有）。★**游戏不受影响。**
 > 工具 `scripts/probe-windows-sensors.sh`，完整证据 `docs/stage4-findings.md` #37。
 >
-> ⚠️**引导链的现状（抹 Windows 之前必须先解决）**：整条 systemd-boot 链
-> （含 `crdroid.conf` 与全部内核）**只在 U 盘 sda1 的 ESP 上**；内置 ESP
-> `nvme0n1p1` 里**只有 Windows 的引导器**。**拔掉 U 盘 = Android 完全无法启动。**
-> 好消息是搬得动：最小引导集只要 ~120 MiB（Android 48 + Ubuntu 救援 71
-> + systemd-boot 0.25），而内置 ESP 有 188 MiB 空闲，不删任何东西就装得下。
-> 实测分区：p1 ESP 300M / p3 Windows 120G / p4 Data 256G / p5 WINPE 1G /
-> p6 Onekey 18G / p7 WinRE 1G / **p8 super 12G / p9 userdata 64G / p10 metadata 32M**。
+> ★**引导链已搬进内置 ESP（第一步完成，待拔盘实测）**。原本整条 systemd-boot 链
+> （含 `crdroid.conf` 与全部内核）**只在 U 盘 sda1 的 ESP 上**，内置 ESP 里
+> 只有 Windows 引导器 —— 拔掉 U 盘 Android 完全起不来，这是抹 Windows 的前置阻塞。
+> `scripts/esp-migrate-to-internal.sh` 已执行：**纯增量，没删改任何 Windows 文件**，
+> 占 108 MiB、剩 80 MiB；被覆盖的 `EFI/Boot/bootaa64.efi` 已备份成
+> `.bak-windows`（3120168 B，与 `bootmgfw.efi` 字节数相同 = 确实是 Windows 引导器副本）。
+> - ★**实测固件仍优先 U 盘**：`LoaderDevicePartUUID` = `d5cb76b5…` = `/dev/sda1`。
+>   所以 U 盘在时走的还是 U 盘那份、默认 Ubuntu、**自动回落安全网完好**；
+>   内置那份只在 U 盘不在时才用到，故其默认项设为 **Android** 才对（已设）。
+> - **待做（需人在机器边）**：拔 U 盘开机，应自动进 Android。
+>   兜底是菜单里 systemd-boot 自动发现的 Windows Boot Manager，测坏也不变砖。
+> - ⚠️**第二步（删 Windows）之前还欠一件事**：Ubuntu 的 rootfs 仍在 U 盘 sda2 上。
+>   Windows 删掉后若 U 盘也不插，就没有任何救援系统了 ——
+>   所以第二步要顺带把 Ubuntu 装进腾出来的空间（有 120 GiB+）。
+> - 实测分区：p1 ESP 300M / p3 Windows 120G / p4 Data 256G / p5 WINPE 1G /
+>   p6 Onekey 18G / p7 WinRE 1G / **p8 super 12G / p9 userdata 64G / p10 metadata 32M**。
 >
 > **★★ Stage 6 M4（2026-08-19 夜）：s2idle 定性 + 音频解锁。**
 >

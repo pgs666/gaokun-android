@@ -548,6 +548,53 @@ sda2 11 GiB ext4 = Ubuntu 根文件系统（`root=UUID=a2447957-fc4d-40d4-ab64-f
 > 有趣的是 `efi=noruntime` **并不妨碍 `bootctl set-oneshot`**：
 > 实测能写能回读 `OneShot Entry`。远程救援闭环靠的就是它。
 
+### 8quater. ✅ 引导链已搬进内置 ESP（2026-08-20 完成，待拔盘实测）
+
+`scripts/esp-migrate-to-internal.sh` 已执行，**纯增量、未删改任何 Windows 文件**。
+内置 ESP 现在的内容（占用 108 MiB，**剩余 80 MiB**）：
+
+```
+EFI/Boot/bootaa64.efi              124416 B  ← systemd-boot（回落路径）
+EFI/Boot/bootaa64.efi.bak-windows 3120168 B  ← 原文件备份
+EFI/systemd/systemd-bootaa64.efi   124416 B
+EFI/Microsoft/…                              ← 原封未动（bootmgfw.efi 3120168 B 仍在）
+loader/loader.conf                           ← default = int-crdroid
+loader/entries/<mid>-int-crdroid.conf        ← Android
+loader/entries/<mid>-int-ubuntu.conf         ← Ubuntu（rootfs 仍在 U 盘，拔盘则起不来）
+<mid>/android/{Image-kb23, ramdisk-crdroid.img, sc8280xp-huawei-gaokun3.dtb}
+<mid>/7.2.0-rc2-gaokun3+/{linux, initrd.img-…, dtb-otg.dtb}
+```
+
+★**备份文件 3120168 B 与 `EFI/Microsoft/Boot/bootmgfw.efi` 字节数完全相同**
+—— 证实被覆盖的那份就是 Windows Boot Manager 的副本，而本体没被动过。
+Windows Boot Manager 会被 systemd-boot **自动发现并列进菜单**，无需写条目。
+
+#### ★ 关键实测：固件仍然优先 U 盘 ESP
+
+装完后重启一次（U 盘不拔），读 EFI 变量：
+
+```
+/sys/firmware/efi/efivars/LoaderDevicePartUUID-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f
+  → d5cb76b5-d8be-4505-ab84-c492bd3bae6e
+/dev/sda1         PARTUUID=d5cb76b5-d8be-4505-ab84-c492bd3bae6e   ← 命中
+/dev/nvme0n1p1    PARTUUID=825eaf3a-52b8-4a93-a747-921ecefd2ded
+```
+
+**结论：U 盘在的时候，走的仍是 U 盘那份，默认 Ubuntu，自动回落安全网完好。**
+内置这份只在 U 盘不在时才会被用到 —— 而那时 Ubuntu 的 rootfs（U 盘 sda2）
+也不在了。所以**内置 ESP 的默认项设成 Android 才是对的，且不损失任何安全网**。
+
+#### 待做：拔盘实测（需要人在机器边）
+
+拔掉 U 盘 → 开机 → 应当自动进 Android（15 秒菜单，默认已是 Android）。
+**这一步的兜底是 Windows**：菜单里有 Windows Boot Manager，Android 起不来也不至于变砖。
+测通之后才谈第二步（删 Windows 分区）。
+
+⚠️ **第二步之前还欠一件事**：Ubuntu 的 rootfs 仍在 U 盘 sda2 上。
+Windows 删掉之后如果 U 盘也不插，就**没有任何救援系统**了。
+所以第二步应当顺带把 Ubuntu 装进内置盘腾出来的空间（有 120 GiB+ 可用）。
+
+
 
 ---
 
