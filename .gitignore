@@ -36,3 +36,7 @@ scripts/gmu-forensics/b1-*/
 #    四个 *.jsn 直接变成待提交文件。新固件迟早再出现新扩展名。
 device/huawei/gaokun3/firmware/**
 !device/huawei/gaokun3/firmware/README.md
+
+# 开发机的 adb 公钥（PRODUCT_ADB_KEYS）。个人密钥，公开仓库不放。
+# 换机器时：cp ~/.android/adbkey.pub device/huawei/gaokun3/adb_keys
+device/huawei/gaokun3/adb_keys

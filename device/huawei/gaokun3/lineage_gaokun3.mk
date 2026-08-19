@@ -88,6 +88,30 @@ WITH_ADB_INSECURE := true
 PRODUCT_SYSTEM_EXT_PROPERTIES += \
     ro.debuggable=1
 
+# ★ 把开发机的 adb 公钥烤进镜像 —— 不依赖 ro.adb.secure 的那条路。
+#
+# 2026-08-19 实测：即使 system_ext 里 ro.adb.secure=0 已经写进产物，
+# 实机 adbd 仍然要求授权（adbd 的判定见 packages/modules/adb/daemon/main.cpp:223-226：
+#   device_unlocked（我们 cmdline 带 verifiedbootstate=orange）为真 →
+#   auth_required = GetBoolProperty("ro.adb.secure", false)），
+# 说明运行时它读到的仍是 1 —— system_ext 的覆盖没有落地，原因待查。
+#
+# 而公钥这条路完全绕开属性：
+#   packages/modules/adb/docs/dev/keystore.md
+#     /adb_keys                 系统公钥，只读，随镜像出厂
+#                               （system/core/rootdir/create_root_structure.mk:36
+#                                把它做成指向 /product/etc/security/adb_keys 的符号链接）
+#     /data/misc/adb/adb_keys   用户公钥，可写分区
+#   adbd 收到 AUTH 挑战时会遍历这两处的所有 RSA 公钥。
+#
+# PRODUCT_ADB_KEYS → soong 的 AdbKeys（build/make/core/soong_config.mk:377），
+# 且只在 eng/userdebug 保留（product_config.mk:493-494），正合我们。
+#
+# ⚠️ adb_keys 文件本身【不入版本库】（.gitignore 挡着）——
+#    它是开发机个人密钥，仓库是公开的。换机器时执行：
+#        cp ~/.android/adbkey.pub device/huawei/gaokun3/adb_keys
+PRODUCT_ADB_KEYS := device/huawei/gaokun3/adb_keys
+
 # crDroid 的「平板 + 无 modem」组合（叠在 AOSP 基座之上）：
 #   common_full_tablet_wifionly.mk = common_mobile_full + tablet + wifionly
 # Lineage 侧用 LOCAL_OVERRIDES_PACKAGES 顶掉 AOSP 的同类应用，不会真的撞包。
