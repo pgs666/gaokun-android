@@ -12,7 +12,8 @@
 # 源码树用环境变量切：SRC_TREE=~/aosp 可回到旧的 AOSP 树。
 #   SRC_TREE=~/aosp bash deploy-from-ubuntu.sh super
 #
-# 前提：Ego 已有直连构建机的 ssh 钥匙（vahiru@<BUILD_VM>），
+# 前提：Ego 已有直连构建机的 ssh 钥匙，且设了 BUILD_VM 环境变量，例如
+#         export BUILD_VM=user@buildhost.example.com
 #       ESP 挂在 /boot/efi（★现在是【内置盘】nvme0n1p1，不再是 U 盘 sda1），
 #       Android 目录是 <machine-id>/android/。
 #
@@ -23,7 +24,9 @@
 #       metadata=nvme0n1p10；nvme0n1p9 是迁移前 userdata 的备份（userdata-old）。
 set -euo pipefail
 
-VM=vahiru@<BUILD_VM>
+# 构建机地址。★不要把真实主机写死在这里 —— 仓库是公开的，
+# 硬编码一台开着 SSH 的机器的地址等于请人来扫。
+VM=${BUILD_VM:?请先 export BUILD_VM=<user>@<构建机地址>}
 # Stage 6 起默认从 crDroid 树取产物（旧 AOSP 树已删，归档在构建机 ~/keep/）
 #
 # ⚠️ 这两个路径里的 ~ 必须保持【字面量】，不能让本地 shell 展开：

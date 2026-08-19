@@ -3,7 +3,9 @@
 # 用法: deploy-turnip.sh [VM_IP]
 set -u
 export MSYS_NO_PATHCONV=1
-VM="${1:-<BUILD_VM>}"
+# 构建机地址：第一个参数，或 BUILD_VM 环境变量。
+# ★不要写死真实主机 —— 仓库公开，硬编码 SSH 地址等于请人来扫。
+VM="${1:-${BUILD_VM:?请传入构建机地址或 export BUILD_VM}}"
 SO=vulkan.freedreno.so
 cd "$(dirname "$0")" || exit 1
 
