@@ -30,6 +30,12 @@ $ADB shell settings put global captive_portal_http_url http://connect.rom.miui.c
 $ADB shell setprop persist.adb.tcp.port 5555
 $ADB shell setprop service.adb.tcp.port 5555
 
+# ★ 关掉大屏默认的「忽略应用方向请求」——否则应用请求横屏时系统不转屏，
+# 而是把应用信箱化塞进竖屏（实测原神被压成 1600x1000）。
+# 镜像里已带 /vendor/etc/display_settings.xml 做开机默认；这里再补一刀，
+# 保证【本次】立刻生效、且重刷 userdata 后也对（/data 那份覆盖层会被清掉）。
+$ADB shell wm set-ignore-orientation-request false
+
 # 触点可视化按需开：
 # $ADB shell settings put system pointer_location 1
 echo "置备完成"

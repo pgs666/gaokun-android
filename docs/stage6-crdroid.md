@@ -1146,9 +1146,11 @@ libc/libm/libdl/libc++ 是 LLNDK，不用管）。
 ⚠️ **框架路径仍未证实**（诚实记账）：`Total writes: 0`，`pcm=closed`。
 但这**不是**"框架坏了"的证据 —— 我试过的每种无头触发（`input tap`、音量键、
 `cmd notification post`、`SET_TIMER`）都**没能让任何 AudioTrack 起来**
-（logcat 里 `AudioTrack`/`AHAL` 一条都没有）。而且：
-**这个 ROM 里没有任何应用能处理音频**
-（`pm query-activities -a VIEW -t audio/ogg` 为空）。
+（logcat 里 `AudioTrack`/`AHAL` 一条都没有）。而且当时我**没找到**能放音频的应用（`pm query-activities -a VIEW -t audio/ogg` 为空）。
+⚠️ **这条推断是错的，2026-08-20 更正**：ROM 自带 `org.lineageos.twelve`（音乐播放器）、
+`org.lineageos.jelly`（浏览器）、`aperture`/`glimpse`/`etar`。那个探针只说明
+「没有为 `audio/ogg` 这个 MIME 注册 VIEW 过滤器的 activity」，**不等于**「没有播放器」
+—— 我把探针的阴性结果过度推广了。
 → 结论是"未测"，不是"坏"。
 
 ★**2026-08-20 用户实机确认：音频可用（听到声音）。框架路径至此确证。**
@@ -1175,7 +1177,7 @@ libc/libm/libdl/libc++ 是 LLNDK，不用管）。
 | 内存/存储 | **15.7 GB RAM**、`/data` 62 GB（61 GB 空）、无 zram | 跑手游余量充足 |
 | GPU 带宽票 | 空闲实测 `3d00000.gpu 0 0 0` | **不是 bug**：DTS 里 GPU 有 `interconnects = <&gem_noc MASTER_GFX3D 0 &mc_virt SLAVE_EBI1 0>` 与 451000→2736000 kBps 的 `opp-peak-kBps`；空闲掉电时票归零属正常。**必须在负载下重测** |
 | CPU→DDR 带宽 | `/sys/class/devfreq/` 只有 `3d00000.gpu`；CPU 只有 `epss_l3` 的票 | `patch sets/freq_scaling/` 那两个 DTS 补丁（CPU→LLCC→DDR）**没应用**，且上游未合（作者 readme 自称 "tried to add"）→ 下一轮，先测量取证 |
-| 应用生态 | 这个 ROM 几乎是裸的：无播放器、无浏览器、无 GMS | 用户要自己 sideload（跑手游本来也是这样） |
+| 应用生态 | 自带 `twelve`(音乐)/`jelly`(浏览器)/`aperture`(相机)/`glimpse`(相册)/`etar`(日历)；**无 GMS** | 游戏要自己 sideload（本来也是这样）。⚠️ 早先说「几乎是裸的」是错的 |
 | 背光 | `/sys/class/backlight/ae96000.dsi.0` 512/4095 可调 | 正常 |
 
 ## 6. 本轮改了什么
@@ -1225,3 +1227,45 @@ libc/libm/libdl/libc++ 是 LLNDK，不用管）。
 | 蓝牙 | 跑完新版 `android-post-flash.sh` 后仍 `state: ON`（证明 #30 的禁用已真正拆除） |
 | WiFi | 已连（锁屏图上的图标为证），`service.adb.tcp.port=5555` 已开 |
 | 待办 | ①实机听声（框架路径）②装游戏实测 ③想真修 s2idle 要先编带 `CONFIG_PM_DEBUG` 的内核 |
+
+## 9. ★横屏：大屏「信箱化」策略，不是缺传感器（2026-08-20）
+
+**症状**（用户实测）：启动游戏时设备不旋转到横屏。
+
+**根因**：Android 在大屏设备上**默认 `ignoreOrientationRequest=true`** ——
+应用请求横屏时系统**不转屏**，而是把应用信箱化塞进竖屏。实测三条对齐的证据：
+
+```
+dumpsys window     : mHasSetIgnoreOrientationRequest=false  ignoreOrientationRequest=true
+                     （false = 没人设过 → 这是平台默认值，不是我们配错）
+dumpsys activity   : com.miHoYo.GetMobileInfo.MainActivity
+                       requestedOrientation=SCREEN_ORIENTATION_LANDSCAPE   ← 应用确实要横屏
+                       areBoundsLetterboxed=true
+                       letterboxReason=FIXED_ORIENTATION
+                     topActivityAppBounds=Rect(0, 0 - 1600, 1000)          ← 被压成一条
+```
+
+> ⚠️ **别和"没有传感器"混为一谈。** 本机确实没有任何传感器（§5），但那只影响
+> **自动旋转**；应用**自己请求**的固定方向与传感器无关，是被上面这个大屏策略挡掉的。
+> 这也是为什么"装了游戏还是竖屏"看起来像传感器问题，其实完全不是。
+
+**修法**
+- 立刻生效、不持久：`adb shell wm set-ignore-orientation-request false`
+- 开机默认（本轮加入设备树）：`device/huawei/gaokun3/etc/display_settings.xml`
+  ```xml
+  <display-settings>
+      <display name="local:0" ignoreOrientationRequest="false" />
+  </display-settings>
+  ```
+  框架读取的基准路径是 `<vendor>/etc/display_settings.xml`；可写覆盖层在
+  `/data/system/display_settings.xml`。**标签与属性名是从设备上的
+  `services.jar` 里抠字符串确认的**（`display-settings`/`config`/`display`；
+  `identifier`/`name`/`ignoreOrientationRequest`/`forcedWidth`/`forcedHeight`/
+  `forcedDensity`/`windowingMode`/`userRotation`/`userRotationMode`/
+  `fixedToUserRotation`/`shouldShowSystemDecors`/`dontMoveToTop`），不是凭记忆。
+  不写 `<config>` 时按 UNIQUE_ID 匹配，内置屏 uniqueId = `local:0`。
+- `scripts/android-post-flash.sh` 也补了那条 `wm` 命令（重刷 userdata 后 /data
+  的覆盖层会被清掉，靠它兜一刀）。
+
+**⚠️ 已应用但需重启才能验证** `/vendor/etc/display_settings.xml` 这条路径是否
+真的被读取；运行时那条已实测生效（`ignoreOrientationRequest=false`）。

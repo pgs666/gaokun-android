@@ -342,6 +342,11 @@ PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/bin/audio-route.sh:$(TARGET_COPY_OUT_VENDOR)/bin/audio-route.sh \
     $(LOCAL_PATH)/etc/audioroute.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/audioroute.rc
 
+# ★ WindowManager 每显示器设置：关掉大屏默认的 ignoreOrientationRequest。
+# 不装它 → 应用请求横屏时系统不转屏而是把应用信箱化（原神被压成 1600x1000）。
+# 完整机制、实测症状与格式依据见 etc/display_settings.xml 的注释。
+PRODUCT_COPY_FILES +=     $(LOCAL_PATH)/etc/display_settings.xml:$(TARGET_COPY_OUT_VENDOR)/etc/display_settings.xml
+
 # ★ tinyalsa 工具集 —— 又一个同类漏网（2026-08-19 M3 上机才发现）。
 # audio-route.sh 第一件事就是找 tinymix，找不到就 `log 找不到 tinymix，放弃; exit 1`。
 # 而 tinymix 从来【没有】被列进 PRODUCT_PACKAGES：Stage 4 时它是手动 push 进
