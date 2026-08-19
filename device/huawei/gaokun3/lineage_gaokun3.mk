@@ -88,6 +88,36 @@ WITH_ADB_INSECURE := true
 PRODUCT_SYSTEM_EXT_PROPERTIES += \
     ro.debuggable=1
 
+# ★★ Codec2 HAL 选 AIDL —— 没有这行就一个解码器都没有。
+#
+# frameworks/av/media/codec2/hal/common/HalSelection.cpp:57
+#     std::string selection = GetProperty("media.c2.hal.selection", "hidl");
+#     if (selection == "aidl") return true;
+#     else if (selection == "hidl") return false;
+# 【默认是 hidl】。而 HIDL 的 Codec2 在 Android 15+ 已经彻底不可用 ——
+# hwservicemanager 被移除，实机日志：
+#     I HidlServiceManagement: Cannot list manifest for
+#         android.hardware.media.c2@1.0::IComponentStore without hwservicemanager
+# 于是 Codec2Client::CacheServiceNames() 拿到空列表：
+#     I Codec2Client: No Codec2 services declared in the manifest.
+# → MediaCodecList 为空 → App 一律 "Failed to create audio/mpeg decoder"，
+#   screenrecord 报 "unable to create video/avc codec instance"。
+#
+# 这就是 docs/stage4-findings.md #36 追了两个阶段的那个"解码器一个都没有"。
+# 它与 crDroid 无关 —— AOSP 16 上同样如此，只是真机设备树都会设这个属性，
+# 我们这棵手搓的从来没设过。
+#
+# 运行时 setprop 之后 Codec2Client 立刻变成
+#     I Codec2Client: Available Codec2 services: "software"
+# 但必须在【开机时】就位：media.swcodec 自己也读它决定注册 AIDL 还是 HIDL。
+#
+# ⚠️ 走 PRODUCT_SYSTEM_EXT_PROPERTIES 而不是 PRODUCT_PROPERTY_OVERRIDES：
+#    后者落进 vendor/build.prop，而该属性的 SELinux 上下文是
+#    codec2_config_prop，vendor context 无权设置，会被静默拒绝
+#    （同 ro.adb.secure / ro.debuggable 的坑，见本文件上面的说明）。
+PRODUCT_SYSTEM_EXT_PROPERTIES += \
+    media.c2.hal.selection=aidl
+
 # ★ 把开发机的 adb 公钥烤进镜像 —— 不依赖 ro.adb.secure 的那条路。
 #
 # 2026-08-19 实测：即使 system_ext 里 ro.adb.secure=0 已经写进产物，

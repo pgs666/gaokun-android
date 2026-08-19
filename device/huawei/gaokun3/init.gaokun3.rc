@@ -23,7 +23,9 @@ on early-init
 #
 # ⚠️ 这是【开发期】措施：代价是永不休眠、耗电。
 #    s2idle 恢复修好之后，删掉这三行即可（或改成按属性开关）。
-on early-init
+# ⚠️ 必须是 `on init` 而不是 `on early-init`：早期 sysfs 还没挂好，
+#    2026-08-19 实测 early-init 写入静默失败（/sys/power/wake_lock 内容为空）。
+on init
     write /sys/power/wake_lock gaokun3_nosuspend
 
 # ⚠️ 这里绝不能自己挂 binderfs —— AOSP 16 的 init.rc 已原生处理
