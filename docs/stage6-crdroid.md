@@ -275,3 +275,87 @@ bash deploy-from-ubuntu.sh rollback    # 刷回换轨前那套 AOSP 16
 ```
 从构建机 `~/keep/aosp16-images/` 拉 super + ramdisk（sha256 校验过），
 内核/DTB 不用换 —— crDroid 和 AOSP 用的是同一个 kb21 内核。
+
+## M1 完成（2026-08-19）：六轮构建，产出 super.img 2.69 GB
+
+| 轮次 | 结果 | 学到什么 |
+|---|---|---|
+| 1 | kati 2:57 中止 | 两个 non-existent module：thermal 的 binary 是 `installable:false` 的 APEX 打包件；`vulkan.freedreno` 尚不存在（M3 才有） |
+| 2 | 97% 处 check_vintf 失败 | 缺 vendor 兼容性矩阵 |
+| 3 | 同上 | 加了 `DEVICE_MATRIX_FILE` 没用 —— 它只决定**内容**，装它的模块 `vendor_compatibility_matrix.xml` 来自 `base_vendor.mk` |
+| 4 | **BUILD-RC=0，但产物是空壳** | `system.img` 29.8 MB，无 `apex/`、无 `app/`、无 `services.jar` |
+| 5 | 成功（1:56:39） | 加回 `full_base.mk` → 目标数 59,227 → **145,445**，`system.img` 1.02 GB |
+| 6 | 成功（07:07） | 补三处 overlay-only 漏网后重打 super |
+
+### ★ 最大的一课：AOSP 基座必须由设备树自己提供
+
+我一度以为 crDroid 自带整套应用、叠 `full_base.mk` 会撞包，于是拿掉了它。
+结果第 4 轮**构建成功但产出空壳**——这比构建失败危险得多，因为它不报错。
+
+`vendor/lineage/` 下的配置全是**补充**性质的：
+
+```
+common.mk         只 inherit vendor/extra、crdroid.mk、vendor/addons、audio.mk
+common_mobile.mk  只补 frameworks/base/data/sounds/AudioPackage14.mk
+tablet.mk         只补 $(SRC_TARGET_DIR)/product/large_screen_common.mk
+```
+
+整个 `vendor/lineage/config/*.mk` 里对 `SRC_TARGET_DIR` 的引用**只有 tablet.mk 一处**。
+LineageOS/crDroid 的设备树本来就该自己 inherit 一个 AOSP base 产品。
+
+前两轮的症状（缺 vendor 矩阵、缺 `/vendor/bin/sh`）其实都是这一件事的局部表现：
+
+```
+full_base → generic_no_telephony → handheld_{system,system_ext,vendor,product}
+         → media_vendor → base_vendor   （vendor_compatibility_matrix.xml、
+                                          shell_and_utilities_vendor = sh + toybox_vendor）
+full_base 还带 frameworks/base/data/sounds/AllAudio.mk（铃声）
+```
+
+### ★ 第二大的一课：三处"只活在设备 overlay 里"的东西
+
+Stage 4/5 有些修复是用 `adb remount` 的 overlay 推进设备的，
+结论写进了 docs，**却从没变成一行构建配置**。照原样构建 crDroid 会得到：
+
+| 漏网 | 上机后的症状 |
+|---|---|
+| `qcom/sc8280xp/SC8280XP-HUAWEI-GAOKUN3-tplg.bin` | 声卡不注册 |
+| `bin/audio-route.sh` + `etc/audioroute.rc` | 声卡注册了但没人配路由 → **能播放、没声音** |
+| 蓝牙 HAL（`android.hardware.bluetooth-service.default`） | 蓝牙起不来 |
+
+这些如果不是装机前逐项对着产物验收，都会变成上机后的疑难杂症
+（本机没有串口，只能靠 logcat 猜）。
+
+> **方法论**：换轨时不要只看 docs 的结论，要 `grep` 构建配置里**有没有那一行**。
+> 判据是"产物里有没有这个文件"，不是"文档里写没写这件事"。
+
+### 其他要点
+
+- `DEVICE_MATRIX_FILE` 用我们自己那份**空**矩阵，不用 AOSP 兜底的
+  `system/libhidl/vintfdata/device_compatibility_matrix.default.xml` ——
+  后者要求 HIDL `android.hidl.manager@1.0::IServiceManager`，
+  而 hwservicemanager 在 Android 15+ 已被移除。
+  assemble_vintf 会自动给我们的空矩阵补上 `<system-sdk><version>36</version>`。
+- `super.img` **不在 `droid` 目标里**，要单独 `m superimage`。
+- 加了 `persist.adb.tcp.port=5555`（`adb/daemon/main.cpp:272-274` 实名核实：
+  先读 `service.adb.tcp.port`，回落 `persist.adb.tcp.port`），
+  换 ROM 后 USB 侧万一不通不至于失联。
+
+### M1 产物验收
+
+```
+super.img    2,687,636,036  sparse（魔数 3a ff 26 ed）
+ramdisk.img     12,064,835
+system.img   1,022,251,008   （旧 AOSP 1,004,400,640，量级对上）
+vendor/bin/sh                                       755  334856
+vendor/bin/audio-route.sh                           755    2342
+vendor/etc/init/audioroute.rc                       644     376
+vendor/bin/hw/android.hardware.bluetooth-service.default  755  294744
+vendor/lib64/android.hardware.bluetooth-V1-ndk.so   755   85272   ← 随包自动装
+vendor/etc/vintf/compatibility_matrix.xml           644     215
+vendor/firmware/qcom/sc8280xp/SC8280XP-HUAWEI-GAOKUN3-tplg.bin
+product/media/audio/  = 92 通知音 + 130 铃声 + 45 闹铃 + 25 UI 音效
+```
+
+★ 最后一行意味着**换轨动机的一半（铃声/UI 音效）已经确凿解决**。
+另一半（解码器）等上机后 `dumpsys media.player` 判定。
