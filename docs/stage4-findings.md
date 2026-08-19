@@ -389,3 +389,80 @@ dumpsys media.player → "Decoder infos by media types:" （空）
 这些产品级配置是 Lineage 设备树的标准组成部分，换轨后大概率自动消失，
 而我们所有的硬件使能成果（内核配置、DTB、固件路径、turnip 补丁、
 混音器路由脚本、SMMU workaround）**全部可平移**。
+
+---
+
+## #37 传感器：不是"DTS 少了个节点"，是整套跑在 SLPI DSP 上（2026-08-20，此路在主线上不通）
+
+### 结论先行
+
+**加速度计、磁力计、光感、接近、铰链角度，全部由 SLPI 传感器 DSP 托管，
+AP 侧根本没有到这些芯片的总线。** 因此：
+
+- 「往 DTS 里加个 `accel@xx` 节点」这条路**不存在**——不是没人写，是没有节点可写。
+- **自动旋转、自动亮度在主线内核上无法实现**，除非有人为 sc8280xp 写出
+  SLPI SEE 的客户端（QMI/FastRPC 那一整套）。**据我所知没有任何
+  sc8280xp 设备做到过（包括 ThinkPad X13s）。**
+- 影响面：没有自动旋转、没有自动亮度、没有铰链角度。
+  ★**游戏不受影响**（应用自己请求方向，`ignoreOrientationRequest=false`
+  之后照常横屏，见 `docs/stage6-crdroid.md` §9）。
+
+### 证据（从本机 Windows 分区只读挂载后直接读出，`scripts/probe-windows-sensors.sh`）
+
+`/dev/nvme0n1p3` 的 `Windows/System32/DriverStore/FileRepository/` 里，
+**没有任何一个具体传感器芯片的独立驱动包**，取而代之的是高通那一套：
+
+```
+qcsensors.inf_arm64_...                 (qcSensors.dll —— 传感器框架)
+qcsensorsconfigqrd8280.inf_arm64_...    (配置 JSON + libsdsprpc.dll)
+qcalwaysoncvsensor(_ext8280).inf        (常开视觉)
+qchumanpresencesensor.inf               (人体存在)
+```
+
+★`libsdsprpc.dll` = **Sensor DSP RPC**。这个名字本身就说明数据通路是
+**AP ⇄ DSP 的 FastRPC**，不是 AP ⇄ I2C 芯片。
+
+配置包里的 JSON 一览（`sns_` 前缀是高通 SEE / Sensors Execution Environment
+的模块命名，这些模块**跑在 SLPI 上，不是跑在 CPU 上**）：
+
+| 类别 | 文件 |
+|---|---|
+| 物理器件 | `sh3001_0.json`（6 轴 IMU）、`sy3133cs_0.json`、`t1000_0.json`、`tcs3701.json`（ams 光感+接近）、`stm_lid_angle.json`（铰链角，节名 `hingeangle_0_platform`） |
+| SEE 算法模块 | `sns_device_orient`（设备方向）、`sns_rotv`（旋转矢量）、`sns_geomag_rv`、`sns_gyro_cal`、`sns_mag_cal`、`sns_amd`、`sns_rmd`、`sns_tilt`、`sns_fmv`、`sns_cm`、`sns_dae`、`sns_aont` |
+
+TCS3701 那份 JSON 解出来的接线（**注意这是 SSC 侧的编号，不是 AP 侧**）：
+
+```
+owner            sns_tcs3701      ← SLPI 上的驱动名
+bus_type         0                ← I2C
+bus_instance     5
+slave_config     57               ← 0x39，ams TCS370x 的经典地址
+dri_irq_num      127
+irq_is_chip_pin  1
+vddio_rail       /pmic/client/sensor_vddio
+```
+
+### ⚠️ 一个尚未排除的疑点（别把本条当成 100% 定论）
+
+这个配置包叫 `qcsensorsconfig**qrd**8280` —— **QRD = 高通参考设计**，
+包内 `hw_platform` 文件的内容也确实是 `QRD`。零售的华为机器**通常**会另有
+一个 OEM 自己的 `qcsensorsconfig<oem>8280` 包，而 DriverStore 里没有。
+
+两种可能：(a) 华为直接沿用了 QRD 配置；(b) 真正的配置在别处（比如
+`C:\Windows\INF\oem*.inf` 或 EC/ACPI 里）。**芯片型号可能不准，
+但"传感器挂在 SLPI 后面、AP 无总线可达"这个结构性结论不受影响** ——
+因为整个 DriverStore 里根本不存在任何 AP 侧的传感器芯片驱动。
+
+### 复现方法
+
+```
+# 在 Ego 的 Ubuntu 里（Android 侧读不了 NTFS）
+bash scripts/probe-windows-sensors.sh
+```
+
+⚠️ 本机 Ubuntu **没有 `ntfs3` 内核模块**，`mount -t ntfs3` 会报
+"未知的文件系统类型"；靠 `mount -o ro` 自动探测走 `fuseblk`（ntfs-3g）才挂得上。
+⚠️ 包里那几个 `8280_qrd_*.json` 是 NTFS 重解析点（symlink），
+ntfs-3g 显示为 `-> unsupported reparse tag 0x80000017`、`stat` 只有 34 字节，
+**读它们会 FileNotFoundError**；要读的是同目录下的**去掉 `8280_qrd_` 前缀**
+的那份实体文件（`sh3001_0.json` / `tcs3701.json` …）。

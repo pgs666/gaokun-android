@@ -1562,3 +1562,117 @@ Normal mixer raw underrun counters: partial=0 empty=0
 
 **下一轮开工第一件事**：rsync 整个设备树 → 重编 → 核对上面 4 个文件 → 再刷。
 在那之前 overlay 顶着，功能都是好的，但**重刷 userdata / 清 scratch 会全部丢失**。
+
+---
+
+## 14. M5：把 4 个修复真正编进镜像 —— 并且【证明】它编进去了（2026-08-20）
+
+§13 记的那个口子已经封上。新镜像 `super.img` sha256
+`131c7f67a801f13326785fbeb7b23429314d3da629c088df06b2d965b50c592d`
+（2 703 442 528 B，构建时间戳 `ro.build.date = Wed Aug 19 20:26:05 UTC 2026`），
+已刷入 `/dev/nvme0n1p8` 并实测启动验收通过。
+
+### 14.1 流程修正：先【比清单】，再传，再比一次
+
+§13 的教训是"scp 单个文件会漏"。这轮改成整树同步，但**没有直接 rsync
+就完事** —— 而是先把两棵树的 md5 清单拉出来对：
+
+```
+# 本地（Windows 侧没有 rsync，用 tar 流；md5sum 的 " *./" 要归一化）
+cd device/huawei/gaokun3 && find . -type f | LC_ALL=C sort | xargs md5sum
+# 构建机
+ssh VM 'cd ~/crdroid/device/huawei/gaokun3 && find . -type f | LC_ALL=C sort | xargs md5sum'
+```
+
+结果**正好**印证了 §13 的判断，一个不多一个不少：
+
+| 类别 | 文件 |
+|---|---|
+| 只在本地（VM 缺） | `bin/thermal-guard.sh`、`etc/display_settings.xml`、`etc/thermalguard.rc` |
+| 两边都有但不同 | `audio/primary_audio_policy_configuration.xml`（删 MMAP）、`device.mk` |
+| **只在 VM（本地没有）** | **无** —— 说明不入库的固件 blob 本地也全在，可以放心整树覆盖 |
+
+★**最后那一行才是关键**：确认"VM 没有本地缺失的文件"之后，整树覆盖才是安全的。
+否则 tar/rsync 一盖，那些不入库的华为固件就没了，而这种丢失要到下次
+构建完刷进去、声卡不注册时才会发现。
+
+传完再比一次 md5，**52 个文件逐字节一致**才开始构建。
+
+### 14.2 构建后核对：staging 不算数，要查进镜像里
+
+`build-m5.sh` 在构建后自动做两层核对。第一层看 staging 目录，第二层用
+**`debugfs`** 直接读 `vendor.img` —— 免挂载、免 root、不用展开 super：
+
+```
+debugfs -R "stat /etc/display_settings.xml" out/target/product/gaokun3/vendor.img
+```
+
+实测结果（全部落地）：
+
+| 文件 | vendor.img 内 |
+|---|---|
+| `/etc/display_settings.xml` | 2240 B ✅ |
+| `/bin/thermal-guard.sh` | 4764 B ✅ |
+| `/etc/init/thermalguard.rc` | 294 B ✅ |
+| `/etc/primary_audio_policy_configuration.xml` | 6205 B ✅ |
+| `/apex/com.android.hardware.audio.apex` | 68 706 304 B ✅（打过 §12 补丁的那份） |
+
+⚠️ **两个会误报的坑**：
+
+1. **`grep -c mmap_no_irq_out` 不是 0，是 1** —— 那 1 处是解释为什么删掉它的
+   **注释**。判据要写成 `grep -c 'name="mmap_no_irq_out"'`（活声明才算）。
+2. **`debugfs` 读 `vendor.img` 好使，读 `system.img` 一行都读不出来** ——
+   `file` 说两个都是 ext4，但 system.img 带了 AOSP 的 shared-blocks 去重，
+   这版 debugfs 解析不了（连 `ls /` 都空）。别据此判"文件没进去"：
+   `tinymix` 就是这样被我误报成 MISS 的，实际它在
+   `installed-files.txt` 里明明白白（`/system/bin/tinymix` 51584 B）。
+   ★ 顺带澄清：`tinymix` **本来就该进 `/system/bin`**，不是 `/vendor/bin`
+   —— `audio-route.sh` 里写死的就是 `M=/system/bin/tinymix`。
+
+### 14.3 刷写核对：判据是 LP 魔数，不是 sha256
+
+沿用 §7 的教训，三项全查：
+
+| 检查 | 期望 | 实测 |
+|---|---|---|
+| 拉到 Ego 的文件与构建产物同一份 | sha256 相同 | `131c7f67…` ✅ |
+| 源文件是不是 sparse（决定能不能 dd） | `3aff26ed` → **必须 simg2img** | `3aff26ed` ✅ |
+| ★**分区偏移 4096 的 LP 几何魔数** | `67446c61` | `67446c61` ✅ |
+
+### 14.4 验收：证据是 overlay 为空
+
+刷 super 会连带抹掉 `/mnt/scratch`（overlay 的 upper 就在 super 的空闲区里
+拼出来的 f2fs）。所以**"overlay 里 0 个文件"本身就是最强的证据** ——
+它证明下面看到的一切都来自镜像，没有任何东西是被 overlay 顶着的：
+
+```
+overlay 挂载数: 0        overlay 里的文件数: 0
+/vendor/bin/thermal-guard.sh          4764  2026-08-20 04:30
+/vendor/etc/display_settings.xml      2240  2026-08-20 04:30
+/vendor/etc/init/thermalguard.rc       294  2026-08-20 04:30
+mmap_no_irq_out 活声明数: 0
+thermalguard=running  smmustall=running  audioroute=已跑完退出(status 0)
+音频路由回读: SpkrLeft/Right PA Volume=12, DAC Switch=On, WSA_COMP1=On,
+              EAR/AUX/HPHL_RDAC=Off       ← 正是扬声器路径
+ro.hardware.vulkan=freedreno   GPU 错误计数 0
+ignoreOrientationRequest false for displayId=0
+/data 侧设置全部保留（只刷 super，没动 userdata）
+WiFi 自动连上 192.168.31.204
+```
+
+### 14.5 顺手拆掉的两颗地雷
+
+1. ★**`deploy-from-ubuntu.sh` 的 `flash_boot` 写错文件** ——
+   它一直往 `$ESP/Image` 和 `$ESP/ramdisk.img` 写，那是**旧 AOSP** 条目
+   `android.conf` 的文件名；`crdroid.conf` 读的是 `Image-kb23` 和
+   `ramdisk-crdroid.img`。也就是说 `deploy-from-ubuntu.sh all` 会把新内核
+   写到**没人读的文件**上然后打印"已更新"——M3 那个"用错条目跑旧内核"的坑
+   换了个壳。已改成从 BLS 条目里 `awk` 出 `linux`/`initrd`/`devicetree`
+   三行，写它实际引用的路径，永远不会漂。
+   > 本轮**不需要** `flash_boot`：产物 `ramdisk.img` 与 ESP 上的
+   > `ramdisk-crdroid.img` sha256 完全相同（`937e1288…`），内核也没重编。
+2. **`bootctl set-oneshot` 的失败是静默的**（原写法 `cmd && echo 成功`）。
+   已改成 `if/else`，失败时打印手动改 `loader.conf` 的办法并 `exit 3`。
+   > 附带查明：**`efi=noruntime` 并不妨碍 `bootctl`** —— 所有 BLS 条目都带
+   > 这个参数，而 `bootctl set-oneshot` 实测成功，`bootctl status` 能回读
+   > `OneShot Entry`。所以远程救援闭环是可靠的，不是碰运气。

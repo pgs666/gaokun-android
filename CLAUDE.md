@@ -5,8 +5,56 @@
 在华为 MateBook E Go（Snapdragon 8cx Gen 3 / sc8280xp，代号 gaokun）上跑原生 AOSP，
 最终目标是能稳定运行 arm64 手游。
 
-**当前阶段：Stage 6 M4 — ★待机已判决为内核/EC 缺陷（Ubuntu 同样复现）；音频 tinymix 已补齐**（每次开工时更新这一行）
+**当前阶段：Stage 6 M5 — ★M4 全部修复已编进镜像并实机验收；原神实测可玩；传感器判死**（每次开工时更新这一行）
 
+> **★★ Stage 6 M5（2026-08-20）：M4 的成果全部固化进镜像 + 传感器判死。**
+>
+> ★**用户实测：原神画质开到极高流畅可玩。** GPU 91% 时间待在最低档 270 MHz、
+> 峰值 690 MHz、最高温 50 °C、零降频、`GMU 错误 0 / a6xx_recover 0 / SMMU fault 0`。
+> 余量非常大。**唯一遗憾是清晰度**：渲染缓冲被钉在 1080×1728，这是原神按
+> **设备白名单**给的档位，不是我们的技术限制（实测把逻辑分辨率改小，缓冲不变
+> → 绝对上限而非比例）。要突破只能伪装机型，**有账号风险，留给用户决定，未做**。
+>
+> ★**新 super 已构建、刷入、验收通过**
+> （sha256 `131c7f67…`，`ro.build.date = Aug 19 20:26:05 UTC`）。
+> M4 那 4 个"只活在 overlay 里"的修复现在真在镜像里了：
+> `display_settings.xml`（横屏）、`thermal-guard.sh` + `thermalguard.rc`（CPU 温控）、
+> 删掉 MMAP 的音频策略。**验收判据是「overlay 里 0 个文件」** ——
+> 刷 super 会连带抹掉 scratch，所以 overlay 空了还一切正常，就证明东西在镜像里。
+> 只刷了 super：产物 ramdisk 与 ESP 上那份 sha256 完全相同，内核也没重编。
+> - 流程：**先比两棵设备树的 md5 清单再传**。这次差异正好是预测的 3 缺 2 改，
+>   且**"VM 上没有本地缺失的文件"**——确认了这条才敢整树覆盖，
+>   否则不入库的华为固件会被 tar 抹掉，而且要到下次刷机声卡不注册才发现。
+> - ⚠️ 两个会误报的核对坑：`grep -c mmap_no_irq_out` 得 1（那是**注释**，
+>   判据要写 `grep -c 'name="mmap_no_irq_out"'`）；**`debugfs` 读得了
+>   `vendor.img` 却读不了 `system.img`**（shared-blocks 去重），
+>   `tinymix` 就是这样被我误报成缺失的 —— 它本来就该在 `/system/bin`。
+> - **拆掉两颗地雷**：`deploy-from-ubuntu.sh` 的 `flash_boot` 一直往
+>   `$ESP/Image` / `ramdisk.img` 写（**旧 AOSP 条目**的文件名），而
+>   `crdroid.conf` 读的是 `Image-kb23` / `ramdisk-crdroid.img`
+>   —— 跑 `all` 会"更新成功"却毫无作用，是 M3 那个坑的翻版；已改成从 BLS
+>   条目里解析实际路径。另一颗是 `bootctl set-oneshot` 失败时静默，已改成炸出来。
+>   > 附带查明：**`efi=noruntime` 不妨碍 `bootctl`**，oneshot 实测可写可回读，
+>   > 远程救援闭环是可靠的。
+>
+> ★**传感器：不是缺 DTS 节点，是整套跑在 SLPI DSP 上 —— 主线此路不通。**
+> 从本机 Windows 分区读出驱动库：没有任何 AP 侧传感器芯片驱动，只有
+> `qcsensors.inf` + `qcsensorsconfigqrd8280`（里面是 `sns_*` 的 SEE 模块配置
+> 和 **`libsdsprpc.dll` = Sensor DSP RPC**）。器件是 `sh3001`(IMU)、
+> `tcs3701`(ams 光感+接近, I2C 0x39)、`sy3133cs`、`t1000`、`stm_lid_angle`(铰链角)，
+> **全挂在 SLPI 自己的总线上，AP 够不着**。
+> → **自动旋转、自动亮度在主线上做不了**（要有人写 SEE 的 QMI/FastRPC 客户端，
+> 至今没有任何 sc8280xp 设备做到，X13s 也没有）。★**游戏不受影响。**
+> 工具 `scripts/probe-windows-sensors.sh`，完整证据 `docs/stage4-findings.md` #37。
+>
+> ⚠️**引导链的现状（抹 Windows 之前必须先解决）**：整条 systemd-boot 链
+> （含 `crdroid.conf` 与全部内核）**只在 U 盘 sda1 的 ESP 上**；内置 ESP
+> `nvme0n1p1` 里**只有 Windows 的引导器**。**拔掉 U 盘 = Android 完全无法启动。**
+> 好消息是搬得动：最小引导集只要 ~120 MiB（Android 48 + Ubuntu 救援 71
+> + systemd-boot 0.25），而内置 ESP 有 188 MiB 空闲，不删任何东西就装得下。
+> 实测分区：p1 ESP 300M / p3 Windows 120G / p4 Data 256G / p5 WINPE 1G /
+> p6 Onekey 18G / p7 WinRE 1G / **p8 super 12G / p9 userdata 64G / p10 metadata 32M**。
+>
 > **★★ Stage 6 M4（2026-08-19 夜）：s2idle 定性 + 音频解锁。**
 >
 > ★**"不能待机"的判决：挂起成功、resume 失败、然后整机被复位 —— 而且在
@@ -51,8 +99,9 @@
 > `android-post-flash.sh` 里的禁用两行已删（留着会在每次重刷 userdata 后
 > 把好的蓝牙重新关掉）。
 >
-> **搁置并说明理由**：传感器（**DTS 里根本没有加速度计/磁力计/光感节点**，
-> 与相机同类；连带没有自动旋转与自动亮度，但**游戏不受影响**）、
+> **搁置并说明理由**：传感器（★M5 已查明**不是缺 DTS 节点，是整套跑在 SLPI
+> DSP 上、AP 无总线可达** → 主线此路不通，见 #37；连带没有自动旋转与自动亮度，
+> 但**游戏不受影响**）、
 > Venus 硬解、UCSI、SELinux 转 enforcing。
 > ⚠️**记一条将来的地雷**：热管理 HAL 是 AOSP mock，它报的 skin/battery
 > **SHUTDOWN 阈值只有 36.0 °C**，而 `ThermalManagerService.shutdownIfNeeded()`

@@ -124,7 +124,20 @@ esac
 #   adb shell setprop service.adb.root 1 && adb root
 # 然后 `mount -t vfat -o rw /dev/block/sda1 /mnt/usb` 直接改 ESP 上的
 # loader.conf（引导 ESP 是 U 盘 = sda1，不是内置盘的 nvme0n1p1）。
-sudo -n bootctl set-oneshot "$ENTRY" && echo "下次启动 → $ENTRY（一次性，默认仍是 Ubuntu）"
+# ⚠️ 这里过去写成 `bootctl set-oneshot ... && echo 成功`，失败时【一声不吭】。
+# 而所有 BLS 条目的 cmdline 都带 efi=noruntime —— 理论上 EFI 变量不可写，
+# bootctl 会失败。实战里这一步是成功过的，说明 Ubuntu 侧仍有 efivarfs；
+# 但不能靠"应该能行"，失败必须炸出来，否则会重启进 Ubuntu 然后一脸茫然。
+if sudo -n bootctl set-oneshot "$ENTRY"; then
+  echo "下次启动 → $ENTRY（一次性，默认仍是 Ubuntu）"
+else
+  echo "!!! bootctl set-oneshot 失败（多半是 efi=noruntime 导致 EFI 变量不可写）"
+  echo "!!! 手动改默认项（记得事后改回 Ubuntu，那是唯一的自动回落安全网）："
+  echo "      sudo cp /boot/efi/loader/loader.conf /boot/efi/loader/loader.conf.bak-manual"
+  echo "      sudo sed -i \"s|^default .*|default $ENTRY|\" /boot/efi/loader/loader.conf"
+  echo "!!! 或者重启后在 systemd-boot 菜单里手选（timeout 15 秒）。"
+  exit 3
+fi
 echo
 echo "现在重启：sudo systemctl reboot"
 echo "起来后建议验证："

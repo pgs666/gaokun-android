@@ -496,6 +496,61 @@ Stage 2 可用空间：p4 的 336.6 GB「Data」是最有余量的目标。
 
 ---
 
+### 8bis. ⚠️ 上表已过期 —— 2026-08-20 实测布局（Android 已就位）
+
+上面那张表是 Stage 0 的快照。Stage 2 从 p4「Data」里切了 76 GB 出来给 Android，
+**分区号从 7 个变成 10 个**。以下是从运行中的 Android 直接读
+`/sys/block/nvme0n1/nvme0n1p*/size` 得到的实测值（总容量 488 386 MiB）：
+
+| 分区 | 大小 | 用途 |
+|---|---|---|
+| p1 | 300 MiB | **内置 ESP** —— ⚠️ 里面**只有 Windows 的引导器**，见下 |
+| p2 | 16 MiB | Microsoft reserved |
+| p3 | 120 GiB | Windows |
+| p4 | **256 GiB** | Data（NTFS，从 336.6 GB 缩过） |
+| p5 | 1 GiB | WINPE |
+| p6 | 18 GiB | Onekey |
+| p7 | 1 GiB | WinRE |
+| **p8** | **12 GiB** | **Android `super`**（system/system_ext/product/vendor + scratch） |
+| **p9** | **64 GiB** | **Android `userdata`** |
+| **p10** | **32 MiB** | **Android `metadata`** |
+
+**U 盘 `sda`（114.6 GiB）**：sda1 1 GiB vfat = **实际在用的 ESP**；
+sda2 11 GiB ext4 = Ubuntu 根文件系统（`root=UUID=a2447957-fc4d-40d4-ab64-faf74f697471`）。
+
+### 8ter. 🔴 引导链全在 U 盘上 —— 拔掉 U 盘就只能进 Windows
+
+实测两块 ESP 的内容：
+
+| | 内置 `nvme0n1p1`（296 M，剩 188 M） | U 盘 `sda1`（0.9 G，剩 523 M） |
+|---|---|---|
+| 内容 | `EFI/Microsoft/`（28 M）、`EFI/Boot/bootaa64.efi`（2.9 M）、`Persisted_Capsules.bin`（70 M） | `EFI/systemd/`、`loader/entries/`（含 **`crdroid.conf`**）、`<machine-id>/`（476 M 的内核与 ramdisk） |
+| 能引导 Android 吗 | ❌ 完全不能 | ✅ 唯一的通路 |
+
+**后果：这台机器目前离不开那支 U 盘。** 想「抹掉 Windows 只留 Android」，
+**第一步必须是把引导链搬进内置 ESP**，否则删完 Windows 机器就彻底不能开机。
+
+**可行性已算过（搬得动）**：最小引导集
+
+| 项 | 大小 |
+|---|---|
+| Android：`Image-kb23` 37 M + `ramdisk-crdroid.img` 11 M + dtb 0.16 M | ~48 MiB |
+| Ubuntu 救援：`Image` 37 M + `initrd` 34 M（共用同一个 dtb） | ~71 MiB |
+| `systemd-bootaa64.efi` ×2 | 0.25 MiB |
+| **合计** | **~120 MiB** |
+
+内置 ESP 有 **188 MiB 空闲**，**不删任何 Windows 文件就装得下**。
+（U 盘那 476 M 里大半是历史内核：kb17/18/20/21/22/23 + 各种 `.bak`。）
+
+⚠️ 没有 `efibootmgr` 可用的余地 —— 所有 BLS 条目都带 `efi=noruntime`。
+唯一的杠杆是**可移动介质回落路径** `EFI/Boot/bootaa64.efi`，
+所以搬迁时必须覆盖内置 ESP 上那一份（**先备份**）。
+> 有趣的是 `efi=noruntime` **并不妨碍 `bootctl set-oneshot`**：
+> 实测能写能回读 `OneShot Entry`。远程救援闭环靠的就是它。
+
+
+---
+
 ## 9. EC / 电源 / 热 ✅
 
 来源：`09-ec-power.txt`（30 KB）—— 详细数值见 dump
