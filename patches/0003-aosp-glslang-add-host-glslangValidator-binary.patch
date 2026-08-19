@@ -1,5 +1,5 @@
 From: gaokun-Android project
-Subject: [PATCH] external/deqp-deps/glslang: add host glslangValidator binary
+Subject: [PATCH] external/deqp-deps/glslang: add self-contained host glslangValidator
 
 mesa 的 turnip（freedreno Vulkan 驱动）在构建期需要 glslangValidator
 把 BVH / ASTC 的 GLSL 计算着色器编成 SPIR-V。AOSP 树里 glslang 只以
@@ -13,40 +13,85 @@ mesa 里 turnip 的 `subdir('bvh')` 是无条件的（vulkan runtime 侧则门�
 prog_glslang.found() 上），所以"让 glslang 不可用"会导致
 `vk_bvh_include_dir` 未定义而生成失败 —— 正路是补上这个 host 工具。
 
-本补丁用树内已有的 glslang 静态库拼出 StandAlone 工具，模块名就叫
-glslangValidator，供 external/mesa3d/Android.bp 的 genrule 以
-`tools: ["glslangValidator"]` + `$(location glslangValidator)` 使用
-（合并脚本 scripts/mesa-bp-merge.py 会自动改写）。
+★ v2（2026-08-19，Stage 6 M3）：本补丁原先写成复用树内的
+  `deqp_glslang_*` 静态库，**在干净树上根本编不过**：
+
+    error: dependency "deqp_glslang_SPIRV" of "glslangValidator"
+           missing variant: os:linux_glibc,link:static
+    available variants: os:android,arch:arm64_armv8-2a,link:static …
+
+  那些静态库继承 `deqp_and_deps_defaults`（external/deqp/Android.bp:59），
+  里面有 `sdk_version: "27"` 与 `-DDE_OS=DE_OS_ANDROID` —— 是彻底的
+  device-only 模块，给它们加 host_supported 会连锁污染整个 deqp。
+  （旧版能在 Stage 5 的 AOSP 树上编过，说明当时还改过别处而本文件没记全；
+    external/deqp 在 crDroid 里就是原版 AOSP 项目，两边并无差异。）
+
+  改成**自足**模块：不碰 deqp 的任何 defaults，直接把 glslang 的源码
+  编进一个 host 可执行文件。代价是重复一份源码清单，换来的是
+  「只依赖 glslang 目录本身」——deqp 侧怎么变都不影响它。
+
+要点：
+  - `-DENABLE_SPIRV`：不给就报 "does not have SPIR-V support"（StandAlone
+    的 SPIR-V 出口是编译期开关，不是运行期选项）
+  - `-DENABLE_HLSL` + 编进 glslang/HLSL/*.cpp：MachineIndependent 里
+    对 HLSL 符号是硬引用，只开宏不给源码会缺符号
+  - 不编 `*/CInterface/*.cpp`：C API 两个文件互相引用，要么都进要么都不进，
+    而 StandAlone 根本不用
+  - `-Wno-error`：AOSP 的 host 全局告警集比 glslang 上游严，这是构建期
+    工具，不值得为它逐条压警告
 
 Apply to: external/deqp-deps/glslang/Android.bp（追加到文件末尾）
 
 --- a/Android.bp
 +++ b/Android.bp
 @@ -- append at end of file --
-+// ─── gaokun3: host 端 glslangValidator ───
-+// mesa/turnip 构建期需要它把 GLSL 计算着色器编成 SPIR-V；Soong 沙箱不允许
-+// 用 PATH 上的系统 glslangValidator，AOSP 树里又只有静态库，故在此补出可执行模块。
++// ─── gaokun3 (patches/0003): 自足的 host 端 glslangValidator ───
++// 供 external/mesa3d/Android.bp 的 genrule 以 tools: ["glslangValidator"]
++// + $(location glslangValidator) 使用（合并脚本 scripts/mesa-bp-merge.py 会改写）。
++// ⚠️ 刻意【不】复用 deqp_glslang_* 静态库：它们是 device-only
++//    （deqp_and_deps_defaults 带 sdk_version:"27"），没有 linux_glibc 变体。
 +cc_binary_host {
 +    name: "glslangValidator",
-+    defaults: [
-+        "deqp_glslang_defaults",
++    cpp_std: "c++17",
++    rtti: true,
++    cflags: [
++        "-DENABLE_HLSL",
++        "-DENABLE_SPIRV",
++        "-DENABLE_SPVREMAPPER",
++        "-DENABLE_OPT=0",
++        "-DGLSLANG_OSINCLUDE_UNIX",
++        "-Wno-error",
++    ],
++    cppflags: [
++        "-fexceptions",
++    ],
++    local_include_dirs: [
++        ".",
++        "StandAlone",
++        "SPIRV",
++        "glslang/MachineIndependent",
++        "glslang/HLSL",
++        "glslang/ResourceLimits",
++    ],
++    generated_headers: [
++        "deqp_glslang_gen_build_info_h",
 +    ],
 +    srcs: [
 +        "StandAlone/StandAlone.cpp",
-+    ],
-+    local_include_dirs: [
-+        "StandAlone",
-+    ],
-+    static_libs: [
-+        "deqp_glslang_glslang",
-+        "deqp_glslang_MachineIndependent",
-+        "deqp_glslang_GenericCodeGen",
-+        "deqp_glslang_OSDependent",
-+        "deqp_glslang_ResourceLimits",
-+        "deqp_glslang_SPIRV",
-+        "deqp_glslang_SPVRemapper",
-+    ],
-+    cppflags: [
-+        "-Wno-unused-result",
++        "glslang/ResourceLimits/ResourceLimits.cpp",
++        "glslang/MachineIndependent/*.cpp",
++        "glslang/MachineIndependent/preprocessor/*.cpp",
++        "glslang/GenericCodeGen/*.cpp",
++        "glslang/HLSL/*.cpp",
++        "glslang/OSDependent/Unix/ossource.cpp",
++        "SPIRV/GlslangToSpv.cpp",
++        "SPIRV/InReadableOrder.cpp",
++        "SPIRV/Logger.cpp",
++        "SPIRV/SpvBuilder.cpp",
++        "SPIRV/SpvPostProcess.cpp",
++        "SPIRV/SpvTools.cpp",
++        "SPIRV/SPVRemapper.cpp",
++        "SPIRV/disassemble.cpp",
++        "SPIRV/doc.cpp",
 +    ],
 +}

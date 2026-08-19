@@ -307,15 +307,26 @@ PRODUCT_COPY_FILES += \
 # GLES 仍由 ANGLE 提供，但它的 Vulkan 后端从此跑在 Adreno 690 上而不是 SwiftShader。
 # ⚠️ GPU 需要 zap shader 固件 qcdxkmsuc8280.mbn（见上面的固件双路安装），
 #    缺了它 GPU 停在安全模式，adreno probe 会失败。
-# ⚠️ Stage 6 M1 暂时注释掉：crDroid 树里还没跑 mesa 生成管线，
-#    vulkan.freedreno 模块尚不存在，列进来会直接中止构建。
-#    M3 跑完 scripts/mesa-*.py + patches/0003..0006 后连同下面的属性一起打开。
-#PRODUCT_PACKAGES += \
-#    vulkan.freedreno
+# Stage 6 M3（2026-08-19）：管线已在 crDroid 树上跑通并打开。
+# crDroid 的 external/mesa3d 与 Stage 5 打补丁那棵是【同一个 commit】
+# （d4b6f1eba289… @ android-16.0.0_r4，mesa 25.3.0-devel），
+# 所以 Stage 5 的补丁树逐字可套，不需要重新对齐生成管线。
+PRODUCT_PACKAGES += \
+    vulkan.freedreno
 
-# Stage 6 M1：先用 pastel（swangle 软渲染）把 ROM 起起来，M3 再切回 freedreno。
+# 排障开关：想回软渲染就把这行改回 pastel（vulkan.pastel 包仍然装着，
+# 两个 HAL 共存于 /vendor/lib64/hw/，只由这条属性决定 libvulkan 加载谁）。
 PRODUCT_VENDOR_PROPERTIES += \
-    ro.hardware.vulkan=pastel
+    ro.hardware.vulkan=freedreno
+
+# GPU SMMU stall 解锁器（常驻安全网）。装它的理由、时序约束与
+# NCB=2 的血泪教训见 etc/smmustall.rc 与 bin/smmu-nostall.sh 的注释。
+# ⚠️ 这两个文件在 Stage 5 只通过 adb push 进过设备，从没写进构建配置 ——
+#    与 audio-route.sh / tplg.bin 是完全同一类漏网。照原样构建会得到
+#    「跑着 turnip 但没有安全网」，第一次 GPU 页错误就永久挂死且无法自愈。
+PRODUCT_COPY_FILES += \
+    $(LOCAL_PATH)/bin/smmu-nostall.sh:$(TARGET_COPY_OUT_VENDOR)/bin/smmu-nostall.sh \
+    $(LOCAL_PATH)/etc/smmustall.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/smmustall.rc
 
 # turnip 调试旗标加载器（快速迭代机制，见 docs/stage5-freedreno.md）
 PRODUCT_COPY_FILES += \

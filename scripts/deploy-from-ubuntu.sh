@@ -84,9 +84,26 @@ case "$MODE" in
   *) echo "未知模式: $MODE（all|super|boot|rollback）"; exit 2 ;;
 esac
 
-# 回到 Android（默认启动项设为 Android，这样以后不用来回折腾）
-sudo -n sed -i "s|^default .*|default $MID-android.conf|" "$(sudo -n bootctl -p)/loader/loader.conf"
-echo "默认启动项 → Android"
+# ⚠️⚠️ 这里【不再】改默认启动项，而是设 oneshot（2026-08-19 M3 血泪）。
+#
+# 旧写法把默认改成 $MID-android.conf，两个后果：
+#   1. ★ 条目就错了 —— android.conf 指向的是【旧 AOSP 的】Image(kb18) +
+#      ramdisk.img。crDroid 有自己的条目 $MID-crdroid.conf
+#      （Image-kb23 + ramdisk-crdroid.img）。用错条目的表现极具迷惑性：
+#      能起来、adb 能连、getprop 都对，但内核是不带 patches/0007 的旧核 →
+#      bpffs 标签问题回归 → system_server 崩溃循环、永远到不了 boot_completed。
+#      查的时候会一路怀疑刚换的 turnip，其实跟 GPU 毫无关系。
+#      判据：`adb shell uname -a` 的编译时间必须与本次内核一致。
+#   2. 破坏"默认留 Ubuntu"这条运维约定 —— 默认是 Ubuntu 时，Android 挂死
+#      拍一下电源键就自动回落到能远程接入的系统；默认改成 Android 就没有
+#      这个安全网了，而本机没有串口。
+#
+# 补救手段（万一又踩到）：Android 起来但卡住时，adb 里两步拿 root——
+#   adb shell setprop service.adb.root 1 && adb root
+# 然后 `mount -t vfat -o rw /dev/block/sda1 /mnt/usb` 直接改 ESP 上的
+# loader.conf（引导 ESP 是 U 盘 = sda1，不是内置盘的 nvme0n1p1）。
+ENTRY=${ENTRY:-$MID-crdroid.conf}
+sudo -n bootctl set-oneshot "$ENTRY" && echo "下次启动 → $ENTRY（一次性，默认仍是 Ubuntu）"
 echo
 echo "现在重启：sudo systemctl reboot"
 echo "起来后建议验证："

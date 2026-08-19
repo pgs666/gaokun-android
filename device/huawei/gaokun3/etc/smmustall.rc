@@ -1,0 +1,29 @@
+# GPU SMMU stall-on-fault 解锁器（Stage 5 D5/D6 的常驻 workaround）。
+#
+# 为什么必须常驻：本平台 gpu_smmu 的 context-fault 中断打不到 CPU
+# （DT 声明 SPI 678/679，硬件实际拉 SPI 675/680 —— 见 docs/stage5-freedreno.md D9），
+# 而 SCTLR.CFCFG=1 是 stall-on-fault。于是【任何一次】GPU 页错误都会让
+# SMMU 永久 stall → AHB 总线 stall → CP 断粮 → GMU 看门狗 → cx gdsc 塌不下去
+# → 全系统 VK_ERROR_DEVICE_LOST 崩溃循环，且无法自愈。
+# patches/0004 v3 之后实测 fault 数 66 → 0，但这条链是"错一次就死"，
+# 所以解锁器留着当安全网，代价是一个 100ms 轮询的 shell 循环。
+#
+# ⚠️ 时序：必须早于 SurfaceFlinger 第一次用 GPU（约开机 7s）。
+#    post-fs-data 触发点在 `on boot`（class_start core/main）之前，正合适。
+#    再早不行 —— 脚本在 /vendor/bin，要等 mount_all 挂上 vendor。
+#
+# ⚠️ 脚本里的 NCB=2 绝对不能调大：扫到未实现的 context bank 会打出
+#    external abort，把内核静默带走（无 tombstone / 无 pstore / adb 不上线）。
+#    实现了几个看 /proc/interrupts 的 arm-smmu-context-fault 条数。
+service smmustall /vendor/bin/smmu-nostall.sh
+    class core
+    user root
+    group root system
+    # 与已验证的 audioroute 服务同款：不给 seclabel 时服务落在 vendor_init
+    # 派生域里，devmem 的 /dev/mem 访问在 enforcing 下会被拒（现在是
+    # permissive，但迟早要收紧，先按能过的写法来）。
+    seclabel u:r:shell:s0
+    disabled
+
+on post-fs-data
+    start smmustall

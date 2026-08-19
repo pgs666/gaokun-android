@@ -33,9 +33,14 @@
 >    `vendor/lineage/` 下全是补充配置。少了它构建"成功"但产出空壳
 >    （`system.img` 29.8 MB、无 apex/app/services.jar）——**比构建失败更危险**。
 >
-> **还欠的**：s2idle 休眠（`CONFIG_PM_WAKELOCKS` 已开但 init 的 `write` 静默失败，
-> 暂用 `settings put system screen_off_timeout` 顶着）；`adb root` 不生效
-> （M3 的 overlayfs remount 依赖它）；turnip 尚未接（M1 起就是 swangle 软渲染）。
+> **已补上（M3 复核）**：s2idle 休眠其实一直是好的 —— init 的
+> `write /sys/power/wake_lock` 从第一次就成功了，我把 `cat` 的
+> "Permission denied"（节点是 `radio:wakelock` 0660，shell 读不了）
+> 当成了"内容为空"。实测 uptime 21 分钟时 `suspend entry` 计数 **0**
+> （修之前 45–60 秒必挂且醒不来）。
+>
+> **还欠的**：`adb root` 不生效（`ro.debuggable=1` 但 `adb root` 无输出、
+> `id` 仍是 shell）；turnip 接入中（M3，见下）。
 
 > **★决策（2026-08-19）：硬件使能告一段落，下一步转 crDroid 移植。**
 > 理由：剩下卡住的东西（App/媒体没声音）**不是硬件或内核问题**，
@@ -59,13 +64,18 @@
 >     设成 `aidl` 后解码器从 0 → 66。详见首屏的 M2 段与 `docs/stage6-crdroid.md`。
 >   - ★**mesa 管线一个都不能丢**：lineage-23.2 的 `external/mesa3d` 就是 AOSP 那份，
 >     `BOARD_MESA3D_*` 是平行项目自带 mesa 仓库的机制，不是 Lineage 的
->     （作废 `docs/stage5-freedreno.md:212` 的猜测）。**但好消息（已实测）**：
->     crDroid 的 `external/mesa3d` 与我们打过补丁的那棵是**同一个 commit**
->     （`d4b6f1eba289…` @ `android-16.0.0_r4`，mesa **25.3.0-devel**，
->     `tu_image.cc:918` 那句 TODO 还在）→ 管线逐字可套，最差直接铺回归档树
->     `~/keep/mesa3d-patched.tar.zst`。
->     ⚠️ 顺带修正：文档里出现过的"mesa 26"是被我们本地改过的 `VERSION`
->     文件误导，上游快照是 25.3.0-devel。
+>     （作废 `docs/stage5-freedreno.md:212` 的猜测）。
+>     ⚠️⚠️ **"两边是同一个 commit"这条结论是错的，2026-08-19 M3 当场推翻**：
+>     `git log -1` 在两棵树上都给 `d4b6f1eba289…`，但那是 **`.git` 的 HEAD**，
+>     而 Stage 5 的 mesa 是**直接铺在工作树上、从未提交**的上游 mesa
+>     —— 于是这个对比必然给出假阳性。逐字节比才看得见真相：
+>     crDroid 树内 = **mesa 25.3.0-devel**，Stage 5 补丁树 = **mesa 26.0.3**，
+>     `git diff` 3791 个文件 / 36.5 万行，是真实的上游版本差
+>     （`gl_shader_stage`→`mesa_shader_stage` 这类重命名、新增文件都在）。
+>     ⚠️ 连带作废：早先那句"'mesa 26' 是被本地改过的 VERSION 文件误导"也是错的。
+>     **正解 = 铺回归档树** `~/keep/mesa3d-patched.tar.zst`（M3 已这么做）：
+>     它就是实测 SMMU fault=0 的那棵，patches/0004 v3 全在里面。
+>     退路：`git checkout . && git clean -fd` 一句话回到 crDroid 原版 25.3。
 >   - 构建机磁盘：**整棵删了 `~/aosp`**（157G → 451G 可用）。
 >     "只删 out 腾到 264G"的算术不够 —— crDroid 源码+.repo≈190G + out 100–130G。
 >     删之前已归档 `~/keep/`（super/ramdisk/turnip.so/mesa 全树，`sha256sum -c` 通过）。

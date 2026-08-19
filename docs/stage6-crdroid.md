@@ -39,7 +39,7 @@
   `ro.media.xml_variant` 引用 → **`media_codecs.xml` 仍然要我们自己装**。
   这一项从"换轨后自动消失"降级为"换轨后的一个明确任务"（M5）。
 
-### ★ mesa 管线一个都不能丢，但比预期便宜得多
+### ★ mesa 管线一个都不能丢；而"同一个 commit"是我自己制造的假阳性
 
 `lineage-23.2` 的 `external/mesa3d` 就是 AOSP 的 `platform/external/mesa3d`，
 manifest 里**没有** `device/mainline/generic` / `kernel/mainline` / `prebuilts/bootmgr`
@@ -49,24 +49,50 @@ manifest 里**没有** `device/mainline/generic` / `kernel/mainline` / `prebuilt
 > （"LineageOS 系可能直接有 `BOARD_MESA3D_*` 支持"）。
 > `scripts/mesa-*.py` + `patches/0003..0006` + `mesa/turnip-shared.bp.in` 全部仍然必需。
 
-**但有个好消息，而且已经实测确认（不是推断）**：crDroid 同步下来的
-`external/mesa3d` 与我们打过补丁的那棵是**同一个 commit**：
+#### 翻案（2026-08-19 M3 当场）
 
+本节原先写着"两棵树是同一个 commit，管线逐字可套"，并据此把 `VERSION` 的
+差异解释成"本地未提交的改动"。**这是错的，而且错法很典型，值得留档。**
+
+| | crDroid 16.0 树内 | Stage 5 归档补丁树 |
+|---|---|---|
+| `git log -1`（`.git` 的 HEAD）| `d4b6f1eba289…` | `d4b6f1eba289…` |
+| `VERSION`（工作树实际内容）| **25.3.0-devel** | **26.0.3** |
+| 相对 HEAD 的 `git diff` | 干净 | **3791 文件 / +365105 −276293** |
+
+错在**比错了对象**：Stage 5 时我们是把上游 mesa 26 **解包铺在
+`external/mesa3d` 的工作树上、从未 `git commit`**，所以 `.git` 里的 HEAD
+自始至终是 AOSP 那个 commit。拿 `git log -1` 去比两棵树，**必然得到相同结果，
+无论工作树里放的是什么**。真相要逐字节比才看得见 —— diff 里是
+`gl_shader_stage` → `mesa_shader_stage` 这类真实的上游重命名和新增文件，
+不是空白差异（`git diff --ignore-all-space` 只少了 17 个文件）。
+
+⚠️ 连带作废：本节原先那句"'mesa 26' 是被改过的 VERSION 文件误导，
+上游快照是 25.3.0-devel"——上游快照确实是 25.3.0-devel，
+但**我们用的从来就是 26.0.3**，两句话说的不是同一棵树。
+
+**方法论教训**：判断"两棵源码树是不是同一份"时，`git log`/`git describe`
+只能证明 `.git` 的历史相同，**证明不了工作树相同**。差一句
+`git status --porcelain | wc -l` 就能当场戳破。
+
+#### 结论与做法
+
+M3 采取的是**整棵铺回归档树**（不是重跑生成管线）：
+
+```bash
+tar --zstd -xf ~/keep/mesa3d-patched.tar.zst -C ~/stage-mesa
+cd ~/crdroid/external/mesa3d
+find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +   # 保 .git
+tar cf - -C ~/stage-mesa/mesa3d . | tar xf - -C .
 ```
-                    crDroid 16.0                 我们归档的（Stage 5）
-git describe        android-16.0.0_r4            android-16.0.0_r4
-HEAD                d4b6f1eba289310b16ee77…      d4b6f1eba28…（同）
-VERSION             25.3.0-devel                 26.0.3   ← 差异见下
-tu_image.cc:918     /* TODO handle VkNativeBufferANDROID */   ← 那句还在
-```
 
-⚠️ **`VERSION` 的差异不是版本不同**：同一 git HEAD，说明我们那棵的 VERSION
-文件是本地未提交的改动（管线自己改的）。**上游快照的真实版本是 mesa
-`25.3.0-devel`**；CLAUDE.md / stage5 文档里出现过的"mesa 26"是被这个改过的
-文件误导的说法，以本节为准。
+理由：归档树就是实测 **SMMU fault 66 → 0** 的那一棵，`patches/0004` v3
+（ANB 延迟绑定）已在里面，所有 12 个管线坑都已经踩平；在 25.3 上重跑管线
+等于把 Stage 5 整场再打一遍，且要重新移植 ANB 修复。
 
-结论：Stage 5 的生成/合并管线可以逐字套用，最差情况直接把
-`~/keep/mesa3d-patched.tar.zst` 整棵铺回去。M3 的风险比预期低得多。
+保留 `.git` 的好处：**一句 `git checkout . && git clean -fd` 就回到
+crDroid 原版 25.3**，随时可对照。代价是 `repo sync --force-sync` 会把它冲掉
+—— 冲掉了就再铺一次，归档在 `~/keep/`。
 
 ## M0 执行记录
 
@@ -665,15 +691,184 @@ App "Failed to create audio/mpeg decoder"。
 
 ### 仍未解决 / 下一步
 
-- **s2idle 休眠**：`CONFIG_PM_WAKELOCKS` 已开、`/sys/power/wake_lock` 已存在，
-  但 init 的 `write` 无论 `on early-init` 还是 `on init` 都没写进去
-  （文件内容为空，logcat 也没有相关报错）。
-  临时办法：`settings put system screen_off_timeout 2147483647` + `svc power stayon true`
-  （存在 /data，清 userdata 后需重设）。
-  下一步：查 init 的 `write` 为何静默失败（可能要 `on property:sys.boot_completed=1`
-  或改成一个 oneshot 服务）。
-- **`adb root` 不生效**：`ro.debuggable=1` 但 `adb root` 无输出、`id` 仍是 shell。
-  怀疑 crDroid 对 adbd 有额外限制，待查。M3 的 overlayfs remount 依赖它。
-- **设备 manifest 里那条 c2 声明现在是多余的**（导致服务被列两次），可以删。
+- ~~**s2idle 休眠**：init 的 `write /sys/power/wake_lock` 静默失败~~
+  ✅ **已解决，而且原本就是好的 —— 之前是我读错了（2026-08-19 M3 复核）**。
+
+  当初判"没写进去"的依据是 `cat /sys/power/wake_lock` 输出为空。实测：
+
+  ```
+  -rw-rw---- 1 radio wakelock 4096 /sys/power/wake_lock
+  $ cat /sys/power/wake_lock
+  cat: /sys/power/wake_lock: Permission denied
+  ```
+
+  节点属主是 `radio:wakelock`、模式 0660，**`shell` 用户既不是属主也不在组里**，
+  连读都读不了。之前那条 `echo "内容: [$(cat …)]"` 把 stderr 丢掉了，
+  于是"权限不足"长得和"内容为空"一模一样。init 是 root，写入从一开始就成功。
+
+  实测佐证：`uptime` 1305 秒（21 分钟）时 `dmesg | grep -ci "suspend entry"` = **0**，
+  而修之前是 45–60 秒必挂起且醒不来。
+
+  ⚠️ **方法论**：sysfs 上"读到空"有三种完全不同的成因 —— 文件不存在、
+  没有读权限、内容真的为空，而它们在丢掉 stderr 的命令替换里长得一样。
+  判断 sysfs 节点状态必须先 `ls -l` 看存在与权限，再看内容。
+  （同一个坑先前已经中过一次：因为写它报的是 "Permission denied" 而不是
+   "No such file"，我据此推断"内核有这项能力"——那次推断碰巧对了，
+   但推理是不成立的，sysfs 对不存在的路径也可能报 Permission denied。）
+
+  遗留：`settings put system screen_off_timeout` / `svc power stayon true`
+  这两条 /data 里的兜底现在是冗余的，可以不再重设。
+- ~~**`adb root` 不生效**~~ ✅ **已解决（2026-08-19 M3），两步走**：
+
+  ```bash
+  adb shell setprop service.adb.root 1     # 关键的一步
+  adb root                                 # 这时才真的重启成 root
+  adb shell id                             # uid=0(root) context=u:r:su:s0
+  ```
+
+  机制：adbd 的 `should_drop_privileges()` 看两个属性 ——
+  `ro.debuggable`（=1，允许提权）和 `service.adb.root`（=1 才真的不降权）。
+  `adb root` 本该自己把 `service.adb.root` 写成 1 再重启自己，但在本机
+  这一步没生效（`adb root` 返回 0、无输出、adbd 也不重启）。
+  由 shell 自己 `setprop` 就能写进去 —— **SELinux 是 permissive，
+  属性上下文的限制只记 avc 不拦**。写进去之后再 `adb root`，
+  adbd 重启并读到 1，就以 root 起来了。
+
+  ⚠️ 顺带查明：`getprop ro.build.type` 是 **`user`** 而不是 `userdebug`
+  （我们构建的是 userdebug 变体），`ro.secure=1`。这解释了为什么各种
+  "userdebug 应该自带 root"的预期都落空。`ro.debuggable` 倒是 1
+  （`SPOOF_SAFETYNET=0` 那一改起了作用）。
+
+  ★ 这把钥匙的真正价值不在 overlayfs remount，而在**远程救砖**：
+  拿到 root 后可以直接挂引导 ESP 改 `loader.conf`，见下面 M3 的坑 4。
+- ~~设备 manifest 里那条 c2 声明是多余的，可以删~~ ✅ **已删（M3）**，
+  而且不删还会直接卡住整树构建 —— `check_vintf` 报
+  "in the device manifest but not specified in framework compatibility matrix"。
+  详见下面 M3 的坑 3。
 - 首次开机应用未就绪（`Could not find provider: media`、没有注册 audio/mpeg 的
   Activity），完整播放验证要等 SetupWizard 走完。
+
+---
+
+## M3：swangle → turnip（硬件 Vulkan）
+
+M1/M2 一路都跑 `ro.hardware.vulkan=pastel`（ANGLE over SwiftShader，纯 CPU），
+这一步把它换成 Adreno 690 的硬件驱动。Stage 5 已经把最难的部分打完了
+（`docs/stage5-freedreno.md` D1–D10），M3 的工作是**把成果搬到 crDroid 树上**，
+而不是重打一遍。
+
+### 做法：铺回归档树，不重跑生成管线
+
+见上面「★ mesa 管线一个都不能丢」一节的翻案。归档树 `~/keep/mesa3d-patched.tar.zst`
+就是实测 SMMU fault 66 → 0 的那一棵（mesa 26.0.3 + `patches/0004` v3），
+整棵铺进 `~/crdroid/external/mesa3d/`，保留 `.git` 以便随时对照/回退。
+
+铺完用 git 反查改动量当作体检：4233 个变更文件、`Android.bp` 15109 行、
+`vulkan.freedreno` 包装模块在位、`tu_knl_drm_msm` 出现 1 次而 `tu_knl_kgsl` 0 次
+（**这一项必须确认**：AOSP 自带的 `aosp.toml` 默认是 kgsl，那是高通闭源内核接口，
+在主线 msm DRM 上根本打不开设备）。
+
+### ⚠️ 顺带发现：`patches/0005`（关抢占）在最终状态里是**没有应用**的
+
+归档时间（UTC 2026-08-18 19:47）晚于 D10 定案 v3 的时间（UTC 16:35），
+而归档树里 `tu_drm_has_preemption()` 和 `device->has_preemption = tu_drm_has_preemption(device)`
+都是原样。也就是说：**实测 fault=0 / 进桌面 / screencap 正常，是在抢占开着的情况下拿到的**。
+`patches/0005` 是 D3 时代"抢占是主嫌"那条错误主线的产物，D10 之后已被回退。
+文件保留在 `patches/` 里作为侦查史，但**不要再应用它**。
+
+### 坑 1 — `patches/0003` 记漏了，干净树上根本编不过
+
+原版 0003 让 `glslangValidator` 复用树内的 `deqp_glslang_*` 静态库。在 crDroid 上：
+
+```
+error: external/deqp-deps/glslang/Android.bp:257:1: dependency
+       "deqp_glslang_SPIRV" of "glslangValidator" missing variant:
+  os:linux_glibc,link:static
+available variants:
+  os:android,arch:arm64_armv8-2a,link:static …
+```
+
+那些静态库继承 `deqp_and_deps_defaults`（`external/deqp/Android.bp:59`），
+带 `sdk_version: "27"` 和 `-DDE_OS=DE_OS_ANDROID` —— 是**彻底的 device-only 模块**，
+没有 `linux_glibc` 变体。给它们加 `host_supported` 会连锁污染整个 deqp。
+
+而 `external/deqp` 在 crDroid 的 manifest 里就是原版 AOSP 项目
+（`platform/external/deqp`, `remote="aosp"`），两边并无差异 ——
+**所以当年在 AOSP 树上能编过，只能是还改过别处而 patches/0003 没记全。**
+这是"补丁文件只记了一半"的典型代价：换棵树就现原形。
+
+改法：写成**自足**模块，自带源码清单，只依赖 glslang 目录本身，
+不碰 deqp 的任何 defaults。落成幂等脚本 `scripts/glslang-host-tool.py`
+（不再靠手贴），`patches/0003` 同步更新为 v2。
+
+两个具体点：
+- `-DENABLE_SPIRV` 不给 → 运行时报 "does not have SPIR-V support"
+  （StandAlone 的 SPIR-V 出口是编译期开关，不是命令行选项）
+- `StandAlone.cpp` 硬 `#include "glslang/glsl_intrinsic_header.h"`，
+  这是 CMake 侧 `gen_extension_headers.py` 生成的，Soong 侧原本无人生成
+  → `fatal error: file not found`。补一个 genrule
+  `gaokun_glslang_glsl_intrinsic_header`。
+
+验收：`out/host/linux-x86/bin/glslangValidator --version` → `Glslang Version: 11:15.1.0`。
+
+### 坑 2 — 生成的 `Android.bp` 里烤死了旧树的绝对路径
+
+铺回归档树后 17 个 genrule 齐刷刷失败：
+
+```
+FileNotFoundError: [Errno 2] No such file or directory:
+  '/home/vahiru/aosp/external/mesa3d/src/freedreno/registers/freedreno_copyright.xml'
+```
+
+`meson_to_hermetic` 的生成器把两类路径写成了**绝对路径**：
+
+```
+cmd: "… --rnn /home/vahiru/aosp/external/mesa3d/src/freedreno/registers …"
+cmd: "… glslangValidator -V -I/home/vahiru/aosp/…/src/vulkan/runtime/bvh
+                            -I/home/vahiru/aosp/…/src/compiler/spirv …"
+```
+
+树从 `~/aosp` 搬到 `~/crdroid`，这些路径全部落空。
+
+★ **不能改成相对路径 / `$(location)`** —— 这些绝对路径的作用恰恰是
+**逃出 Soong 的 sbox 沙箱**：沙箱里只有被声明成 `srcs` 的文件，而 glslang
+那两个 `-I` 指向的目录（尤其 `src/compiler/spirv` 下被 `#include` 的头）
+根本没被声明。改相对 = 沙箱里找不到，失败得更晚更难查。
+
+正解是"重定位"而不是"相对化"：`scripts/mesa-relocate-abs-paths.py`
+把任意 `<abs>/external/mesa3d` 前缀统一改写成当前树的实际路径
+（Android.bp 62 处 + Android_res.bp 71 处）。幂等，换构建机也不用改脚本。
+副作用是构建不 hermetic（out/ 里留有本机路径），但这是生成器的既有行为。
+
+### 顺带补上：`smmu-nostall.sh` 也是"只活在设备 overlay 里"的漏网
+
+`bin/smmu-nostall.sh` + `etc/smmustall.rc` 之前从没进过构建配置
+（和 `audio-route.sh`、`SC8280XP-HUAWEI-GAOKUN3-tplg.bin` 是同一类）。
+它是 GPU SMMU stall-on-fault 的常驻解锁器 —— 本平台 context-fault 中断
+打不到 CPU，任何一次 GPU 页错误都会让 SMMU 永久 stall 并拖死整条链，
+**错一次就死且不自愈**。0004 v3 之后 fault 实测为 0，但安全网必须在。
+
+时序：挂在 `on post-fs-data`（脚本在 /vendor/bin，要等 mount_all；
+而 SurfaceFlinger 首次用 GPU 在 `on boot` 之后，来得及）。
+`seclabel u:r:shell:s0` 照 audioroute 的写法。
+⚠️ 脚本里的 `NCB=2` 绝不能调大 —— 扫未实现的 context bank 会打出 external abort，
+把内核静默带走。
+
+### 坑 3 — 设备 manifest 里那条 c2 声明会直接卡住整树构建
+
+M2 遗留的"多余声明"不只是多余，整树构建到 `check_vintf` 就死：
+
+```
+ERROR: files are incompatible: The following instances are in the device
+manifest but not specified in framework compatibility matrix:
+    android.hardware.media.c2.IComponentStore/software (@1)
+```
+
+`android.hardware.media.c2` 是**平台 HAL**，只能由 framework compatibility
+matrix 认领；设备 manifest 单方面声明它，就成了"多出来的实例"。
+（M1/M2 时之所以没炸，是因为那几轮构建没走到 `check_vintf_all` 这一步 ——
+`m vulkan.freedreno` 之后第一次跑整树才撞上。）
+
+删掉即可 —— 真凶从来就是 `media.c2.hal.selection=hidl`，
+这条声明是错误归因时代的遗物。`device/huawei/gaokun3/manifest.xml`
+现在只剩 `target-level="202504"`，删除理由写在文件注释里。
