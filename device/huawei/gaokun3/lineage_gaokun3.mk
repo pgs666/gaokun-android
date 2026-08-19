@@ -44,6 +44,25 @@ $(call inherit-product, $(SRC_TARGET_DIR)/product/core_64_bit.mk)
 # 正是我们旧的 aosp_gaokun3.mk 用过、并产出可用镜像的那条链。
 $(call inherit-product, $(SRC_TARGET_DIR)/product/full_base.mk)
 
+# ★ 关掉 adb 授权 —— 必须在 inherit crDroid 配置【之前】设。
+#
+# 2026-08-19 首次上机踩到：crDroid 起来了，但 adb 一直是 unauthorized，
+# 而设备端没有 ssh、也就没法远程重启，等于失联（只能靠人去点屏幕）。
+#
+# vendor/lineage/config/common.mk:33-45 的逻辑：
+#     ifeq ($(TARGET_BUILD_VARIANT),eng)      ro.adb.secure=0
+#     else ifdef WITH_ADB_INSECURE            ro.adb.secure=0
+#     else                                    ro.adb.secure=1
+#                                             PRODUCT_NOT_DEBUGGABLE_IN_USERDEBUG := true
+# 后一个分支还会把 userdebug 的 ro.debuggable 压成 0 ——
+# 那样 adb root / adb remount 都不能用，而 M3 部署 turnip 全靠 overlay。
+#
+# ⚠️ 我们 device.mk 里那句 PRODUCT_PROPERTY_OVERRIDES += ro.adb.secure=0
+#    落在 vendor/build.prop，而 system/build.prop 里的 ro.adb.secure=1 先被 init
+#    读到 —— ro.* 是只读属性，先设者胜，所以 vendor 那份完全无效。
+#    必须从源头（这个开关）解决。
+WITH_ADB_INSECURE := true
+
 # crDroid 的「平板 + 无 modem」组合（叠在 AOSP 基座之上）：
 #   common_full_tablet_wifionly.mk = common_mobile_full + tablet + wifionly
 # Lineage 侧用 LOCAL_OVERRIDES_PACKAGES 顶掉 AOSP 的同类应用，不会真的撞包。
