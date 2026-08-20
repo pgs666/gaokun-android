@@ -244,8 +244,8 @@ Installed on $DISK:
 Reboot, then pick "crDroid 16.0 (gaokun3) — slot _a" from the menu.
 
 First boot takes a couple of minutes. Afterwards:
-  * run scripts/android-post-flash.sh from a host with adb, and
-  * connect Wi-Fi once by hand — the framework permanently disables a network
-    it has decided has no internet, and only a user-initiated connection with
-    a password clears that.
+  * connect Wi-Fi once by hand. That is the only manual step left: the
+    framework permanently disables a network it has decided has no internet,
+    and only a user-initiated connection with a password clears that. Every
+    other setting that used to need a post-flash script is now in the image.
 EOF

@@ -110,7 +110,7 @@ flash_rollback() {
   sync
   echo "已回退。注意 /data 里是 crDroid 写的数据，AOSP 起不来就清 userdata："
   echo "  sudo mkfs.ext4 -F /dev/disk/by-partlabel/userdata"
-  echo "  然后重启进 Android 后跑 scripts/android-post-flash.sh"
+  echo "  （置备已编进镜像，不再需要刷机后脚本；只需手动连一次 WiFi）"
 }
 
 case "$MODE" in
@@ -159,4 +159,4 @@ echo "起来后建议验证："
 echo "  adb shell 'dmesg | grep -iE \"zap|adreno\" | tail -5'          # zap shader 应无报错"
 echo "  adb shell 'getprop ro.hardware.vulkan; ls /vendor/lib64/hw/'  # 应为 freedreno"
 echo "  adb shell 'cat /proc/asound/cards'                            # 应能看到声卡"
-echo "  bash scripts/android-post-flash.sh                            # /data 侧置备"
+echo "  （无需刷机后脚本 —— 置备已编进镜像，M7 起）"

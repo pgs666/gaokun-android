@@ -5,7 +5,7 @@
 在华为 MateBook E Go（Snapdragon 8cx Gen 3 / sc8280xp，代号 gaokun）上跑原生 AOSP，
 最终目标是能稳定运行 arm64 手游。
 
-**当前阶段：Stage 6 M6 完成 — ★★已公开发版；Virtual A/B + 自研 boot_control HAL 跑通；★系统内 OTA 已接通 R2 并实机验证**（每次开工时更新这一行）
+**当前阶段：Stage 6 M8 完成 — ★系统内 OTA 接通 R2；★CPU 温控 DTS 根治；★渲染 120 Hz；★刷机后脚本已彻底取消**（每次开工时更新这一行）
 
 > **★★ Stage 6 M5（2026-08-20）：M4 的成果全部固化进镜像 + 传感器判死。**
 >
@@ -46,6 +46,73 @@
 > → **自动旋转、自动亮度在主线上做不了**（要有人写 SEE 的 QMI/FastRPC 客户端，
 > 至今没有任何 sc8280xp 设备做到，X13s 也没有）。★**游戏不受影响。**
 > 工具 `scripts/probe-windows-sensors.sh`，完整证据 `docs/stage4-findings.md` #37。
+>
+> **★★ Stage 6 M7/M8（2026-08-20）：温控根治 + 120 Hz + 取消刷机后脚本。**
+>
+> ★**CPU 温控从 DTS 层根治**（`patches/0009`）。主线 `sc8280xp.dtsi` 全文只有
+> 一个 `cooling-maps`（在 `gpu-thermal` 下），8 个 `cpuN-thermal` 只有一条
+> 110 °C critical、没有任何 cooling device —— CPU 一路满频跑到内核紧急关机。
+> 补丁给 8 个温区各加 85 °C passive trip 并绑本簇 cpufreq cooling device。
+> 同机只换 DTB 实测：**cdev 0→1、trip 1→2**，`cpu0→cpufreq-cpu0`、
+> `cpu4→cpufreq-cpu4`；反解 DTB 也核过（cooling-maps 1→10 处）。
+> ★因此 `thermal-guard.sh` **从镜像撤掉** —— 不是"留着当双保险"：温区绑定后
+> `cur_state` 归内核 thermal core（step_wise 持续写），用户态再写就是打架。
+>
+> ★**渲染解锁 120 Hz**。面板硬件模式本来就是 120（`activeMode vsyncRate=120`），
+> 钉住渲染的是 `config_defaultRefreshRate = 60`
+> （`frameworks/base/core/res/res/values/config.xml:5870`）。
+> ⚠️**`Settings.System.peak_refresh_rate` 改不动它** —— 实测设 120 后调度器
+> duration 仍是 16.67 ms；管事的是 base 不是 peak。用框架资源 overlay 设成 120，
+> 实机验证 `defaultRefreshRate: 120`、**SF duration 15.67→7.33 ms**。
+> 选"钉住"而非 peak=120+default=0：60/120 两个模式在**不同 mode group**，
+> 之间切换是非无缝 modeset。
+>
+> ★**刷机后脚本 `android-post-flash.sh` 已删除**，七件事逐条有下落：
+> 两条本来多余（`stay_on_while_plugged_in` 的 AOSP 默认就是 false；
+> 横屏已由 `/vendor/etc/display_settings.xml` 负责）；
+> 两条 adb 属性**早就在 device.mk:36**（adbd 先读 `service.` 回落 `persist.`，
+> 全新刷机时 persist 那份已生效 —— 本轮实测：`service.adb.tcp.port` 为空而
+> TCP adb 正常连着）；
+> 三条新编进去（`def_screen_off_timeout` 120000、captive portal 两条 URL）。
+> 唯一仍需人工的是"首次带密码手连一次 WiFi"（#29 的解禁条件，无法预置）。
+>
+> ⚠️**captive portal 的正确改法**（源码明写）：必须覆盖
+> `config_captive_portal_*_url` 而**不是** `default_*` ——
+> `packages/modules/NetworkStack/res/values/config.xml:10-15` 说 `default_*`
+> 不可 overlay、改它 "will break if the enforcement of overlayable starts"。
+> `config_*` 在该模块 `<overlayable name="NetworkStackConfig">` 里（policy
+> product|system|vendor），且它在 `res/values/config.xml:41` **定义为空串**，
+> `NetworkMonitor.java:2671-2674` 非空则用、否则回落 `default_*`。
+> ★**不新建 RRO**：树里已有 `vendor/lineage/overlay/rro_packages/
+> NetworkStackOverlay`，打包/manifest/targetName 都对，只需往它 res 里加资源；
+> 但**必须配 `<add-resource>`** —— 构建期 overlay 只能覆盖目标资源表里已存在
+> 的条目，那个 RRO 自己只定义了 `config_dhcp_client_hostname`。
+> 实机验证：探测日志里实际用的是 `connect.rom.miui.com/generate_204`，
+> `isValidated=true`。（`config_captive_portal_fallback_urls` 未覆盖，
+> 日志里还能看到一次 `play.googleapis.com`，待办。）
+>
+> ⚠️**两个自己造成的构建失败，都值得记**：
+> 1. `<add-resource>` 缺失 → `error: resource ... does not override an
+>    existing resource`。构建期 overlay ≠ 能新增资源。
+> 2. ★**XML 注释里不能有 `--`**。我在注释里原样引用 aapt2 的提示
+>    `--auto-add-overlay`，于是 `xml parser error: not well-formed (invalid
+>    token)` 且报在 **line 0**，极具迷惑性。现在所有 overlay XML 都过一遍
+>    解析体检。
+>
+> ⚠️**GPU SMMU 中断：查清了但没动**。实际 DT 是全局 672/673、context bank
+> 从 **678** 起（678=CB0 … 689=CB11）。对照 D6 观测（硬件拉 675/680）：
+> **680 声明了但被分给 CB2，675 整张表里根本没有**（674–677 是空的），
+> 很像 CB 起始偏移就错了。但只凭"675/680 挂起"推不出正确映射
+> （若 CB0=675 则 680 会是 CB5，而实现的 CB 只有 2 个，自相矛盾）。
+> **改错了没有任何征兆，只是继续收不到 fault**，故未改。
+>
+> ⚠️**运维两条**：
+> * **`gaokun3-rescue.local` 在 git-bash 的 ssh 里解析不了**（MSYS 走 Cygwin
+>   解析器、不做 mDNS；Windows 自己的 `ping` 能解）。可靠做法是**按 hostname
+>   扫网段**：ping 全段填 ARP，再逐个 ssh 取 `hostname` 比对。
+> * **USB adb 会掉**（#27），而且 IP 会漂。本轮就靠**扫 5555 端口 + 比对
+>   `ro.crdroid.device`** 找回设备。这正是把 `persist.adb.tcp.port=5555`
+>   编进镜像的价值 —— 实测它救了场。
 >
 > **★★ Stage 6 M6（2026-08-20）：公开发版 + A/B OTA 打通。**
 >

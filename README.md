@@ -29,7 +29,7 @@ Everything below was measured on hardware, not inferred. The evidence is in
 | Area | State | Notes |
 |---|:--:|---|
 | Boot (UEFI + systemd-boot, internal disk) | ✅ | No USB media required |
-| Display 1600×2560 | ✅ | Panel also has a 120 Hz mode; render is pinned to 60 |
+| Display 1600×2560 @ 120 Hz | ✅ | The framework default pinned rendering to 60; overridden, measured 8.33 ms vsync |
 | GPU — Adreno 690, hardware Vulkan | ✅ | Mesa 26.0.3 `turnip`; zero SMMU faults over a 22-minute soak |
 | Touchscreen | ✅ | Himax HX83121A; needs the gpio174 patch in `patches/` |
 | Detachable keyboard + touchpad | ✅ | USB HID `12d1:10b8` |
@@ -39,7 +39,7 @@ Everything below was measured on hardware, not inferred. The evidence is in
 | Headphone jack / microphone | ❓ | Jack detection and 15 HPH mixer controls exist; untested |
 | Battery, charging, lid switch | ✅ | Huawei EC driver |
 | **Gaming** | ✅ | Genshin Impact at max graphics, smooth. GPU idles at 270 MHz, peaks 690 MHz, 50 °C |
-| CPU thermal throttling | ⚠️ | Mainline DTS has **no** CPU cooling maps — replaced by a userspace guard, see below |
+| CPU thermal throttling | ✅ | Mainline DTS has **no** CPU cooling maps at all — fixed in [`patches/0009`](patches/) |
 | **Suspend / standby** | ❌ | s2idle **resumes into a reset**. Kernel/EC bug — reproduces identically under Ubuntu |
 | Sensors (accelerometer, ALS) | ❌ | Live on the SLPI DSP, unreachable from mainline. No auto-rotate, no auto-brightness |
 | Hardware video decode | ❌ | Venus not enabled; 66 software codecs only |
@@ -50,14 +50,18 @@ Everything below was measured on hardware, not inferred. The evidence is in
 
 ### Two things that will surprise you
 
-**The mainline device tree has no CPU thermal throttling.** `sc8280xp.dtsi`
-contains exactly one `cooling-maps` block, and it is under `gpu-thermal`. Every
-CPU zone has a single 110 °C *critical* trip and nothing else — so the CPUs run
-flat out until the kernel performs an emergency shutdown, with no gradual
-throttling in between. On a fanless tablet that is reachable. This port ships
-[`thermal-guard.sh`](device/huawei/gaokun3/bin/thermal-guard.sh), a userspace
-step-wise governor driving the `cpufreq-cpu0` / `cpufreq-cpu4` cooling devices.
-Fixing it properly means adding passive trips and cooling maps to the DTS.
+**The mainline device tree had no CPU thermal throttling at all.**
+`sc8280xp.dtsi` contains exactly one `cooling-maps` block and it is under
+`gpu-thermal`. Every CPU zone had a single 110 °C *critical* trip and nothing
+else — so the CPUs ran flat out until the kernel performed an emergency
+shutdown, with no gradual throttling in between. On a fanless tablet that is
+reachable.
+
+[`patches/0009`](patches/) fixes it in the device tree: a passive trip at 85 °C
+on each of the eight per-core zones, bound to that core's cluster cpufreq
+cooling device. Measured on the same machine across a DTB swap: cooling devices
+bound per zone 0 → 1, trip points 1 → 2. Worth knowing if you run any other
+sc8280xp machine on mainline — the gap is not specific to this device.
 
 **Standby is broken below Android.** The machine suspends, fails to resume, and
 resets itself about 13 seconds later. The RTC alarm fires correctly, so the
@@ -161,7 +165,6 @@ conclusions were later overturned. Several of them were.
 | s2idle resume fails; the machine resets | [`docs/stage6-crdroid.md`](docs/stage6-crdroid.md) §M4 |
 | Sensors are behind the SLPI DSP (#37) | [`docs/stage4-findings.md`](docs/stage4-findings.md) |
 | USB re-enumeration drops adb after unplug — use adb over TCP (#27) | [`docs/stage4-findings.md`](docs/stage4-findings.md) |
-| No CPU cooling maps in the mainline DTS | [`docs/stage6-crdroid.md`](docs/stage6-crdroid.md) §10 |
 | GPU SMMU raises SPI 675/680 while the DT declares 678/679 | [`docs/stage5-freedreno.md`](docs/stage5-freedreno.md) D6 |
 | The thermal HAL is the AOSP mock, and its SHUTDOWN threshold is 36 °C | [`docs/stage6-crdroid.md`](docs/stage6-crdroid.md) §M4 |
 
@@ -180,15 +183,14 @@ Concrete, well-scoped work, roughly easiest first:
 3. **A real thermal HAL** reading `/sys/class/thermal`. ⚠️ Raise the SHUTDOWN
    thresholds at the same time — the AOSP mock reports 36 °C, and
    `ThermalManagerService` will power the machine off when it sees that.
-4. **CPU cooling maps in the DTS**, retiring `thermal-guard.sh`.
-5. **SELinux enforcing.** Two services need policy written.
-6. **s2idle resume.** Needs a kernel with `CONFIG_PM_DEBUG` to bisect —
+4. **SELinux enforcing.** Two services need policy written.
+5. **s2idle resume.** Needs a kernel with `CONFIG_PM_DEBUG` to bisect —
    `/sys/power/pm_test` does not exist in the shipped config. Probably upstream
    kernel/EC work.
-7. **Sensors.** Would require a mainline client for Qualcomm's SEE running on
+6. **Sensors.** Would require a mainline client for Qualcomm's SEE running on
    the SLPI, over QMI/FastRPC. Nobody has done this for any SC8280XP device,
    the ThinkPad X13s included.
-8. **Camera.** Untouched.
+7. **Camera.** Untouched.
 
 If you have a MateBook E Go and want to test, open an issue — reports of what
 breaks are as useful as patches. Please include your BIOS version and SKU.

@@ -24,7 +24,7 @@ recovery 分区，也没有串口。这不是一次常规移植 —— 它是 **
 | 项目 | 状态 | 说明 |
 |---|:--:|---|
 | 引导（UEFI + systemd-boot，内置盘） | ✅ | 不需要 U 盘 |
-| 屏幕 1600×2560 | ✅ | 面板有 120 Hz 模式，但渲染被钉在 60 |
+| 屏幕 1600×2560 @ 120 Hz | ✅ | 框架默认值把渲染钉在 60，已覆盖；实测 vsync 周期 8.33 ms |
 | GPU —— Adreno 690 硬件 Vulkan | ✅ | Mesa 26.0.3 `turnip`；22 分钟浸泡零 SMMU fault |
 | 触摸屏 | ✅ | Himax HX83121A；需要 `patches/` 里的 gpio174 补丁 |
 | 磁吸键盘 + 触控板 | ✅ | USB HID `12d1:10b8` |
@@ -34,7 +34,7 @@ recovery 分区，也没有串口。这不是一次常规移植 —— 它是 **
 | 耳机口 / 麦克风 | ❓ | 插拔检测和 15 个 HPH 控件都在，**未实测** |
 | 电池、充电、合盖检测 | ✅ | 华为 EC 驱动 |
 | **游戏** | ✅ | 原神画质极高流畅。GPU 空闲 270 MHz、峰值 690 MHz、最高 50 °C |
-| CPU 温控降频 | ⚠️ | 主线 DTS **根本没有** CPU 的 cooling map，改用用户态守护，见下 |
+| CPU 温控降频 | ✅ | 主线 DTS **根本没有** CPU 的 cooling map —— 已由 [`patches/0009`](patches/) 在设备树里根治 |
 | **待机 / 挂起** | ❌ | s2idle **挂得下去、醒不回来**，随后整机复位。内核/EC 缺陷 —— Ubuntu 下同样复现 |
 | 传感器（加速度计、光感） | ❌ | 挂在 SLPI DSP 后面，主线够不着。**没有自动旋转、没有自动亮度** |
 | 硬件视频解码 | ❌ | Venus 未启用；66 个编解码器全是软解 |
@@ -45,13 +45,15 @@ recovery 分区，也没有串口。这不是一次常规移植 —— 它是 **
 
 ### 两件反直觉的事
 
-**主线设备树里没有 CPU 温控。** `sc8280xp.dtsi` 里总共只有一处 `cooling-maps`，
-在 `gpu-thermal` 下面。每个 CPU 温区只有一条 110 °C 的 *critical* trip，
-别的什么都没有 —— 也就是说 CPU 会一路满频跑到内核紧急关机，中间**没有任何
-渐进降频**。这台是被动散热的无风扇平板，长时间游戏真的撞得到。
-本项目带了 [`thermal-guard.sh`](device/huawei/gaokun3/bin/thermal-guard.sh)，
-一个用户态的 step-wise 调节器，直接驱动 `cpufreq-cpu0` / `cpufreq-cpu4`
-两个 cooling device。根治的做法是往 DTS 里加 passive trip 和 cooling map。
+**主线设备树里原先完全没有 CPU 温控。** `sc8280xp.dtsi` 里总共只有一处
+`cooling-maps`，在 `gpu-thermal` 下面。每个 CPU 温区只有一条 110 °C 的
+*critical* trip，别的什么都没有 —— CPU 会一路满频跑到内核紧急关机，
+中间**没有任何渐进降频**。这台是被动散热的无风扇平板，长时间游戏真的撞得到。
+
+[`patches/0009`](patches/) 在设备树里把它修好了：8 个 per-core 温区各加一条
+85 °C 的 passive trip，绑到本簇的 cpufreq cooling device。同一台机器只换 DTB
+的实测对比：每个温区绑定的 cooling device 从 0 变 1、trip 点从 1 变 2。
+**这个缺口不是本机特有的** —— 任何跑主线的 sc8280xp 机器都值得看一眼。
 
 **待机是在 Android 之下坏掉的。** 机器挂得下去，醒不回来，大约 13 秒后整机复位。
 RTC 闹钟**确实按时触发**，所以坏在 *resume* 而不是 suspend。已用实验排除：
@@ -149,7 +151,6 @@ Android 相关的配置断言在
 | s2idle 醒不回来，整机复位 | [`docs/stage6-crdroid.md`](docs/stage6-crdroid.md) §M4 |
 | 传感器挂在 SLPI DSP 后面（#37） | [`docs/stage4-findings.md`](docs/stage4-findings.md) |
 | 拔插 USB 后 adb 不重枚举，用 adb over TCP 兜底（#27） | [`docs/stage4-findings.md`](docs/stage4-findings.md) |
-| 主线 DTS 缺 CPU 的 cooling map | [`docs/stage6-crdroid.md`](docs/stage6-crdroid.md) §10 |
 | GPU SMMU 拉的是 SPI 675/680，而 DT 声明 678/679 | [`docs/stage5-freedreno.md`](docs/stage5-freedreno.md) D6 |
 | 热管理 HAL 是 AOSP mock，它的 SHUTDOWN 阈值只有 36 °C | [`docs/stage6-crdroid.md`](docs/stage6-crdroid.md) §M4 |
 
@@ -167,13 +168,12 @@ Android 相关的配置断言在
 3. **写一个真的热管理 HAL**，读 `/sys/class/thermal`。⚠️ **必须同时把 SHUTDOWN
    阈值改掉** —— AOSP mock 报的是 36 °C，`ThermalManagerService` 看到就会
    直接关机。
-4. **给 DTS 加 CPU 的 cooling map**，让 `thermal-guard.sh` 退休。
-5. **SELinux 转 enforcing。** 有两个服务需要写策略。
-6. **s2idle 的 resume。** 要先编一个带 `CONFIG_PM_DEBUG` 的内核才能二分
+4. **SELinux 转 enforcing。** 有两个服务需要写策略。
+5. **s2idle 的 resume。** 要先编一个带 `CONFIG_PM_DEBUG` 的内核才能二分
    （现在的配置里没有 `/sys/power/pm_test`）。多半是上游内核/EC 的活。
-7. **传感器。** 需要给 SLPI 上跑的高通 SEE 写一个主线客户端，走 QMI/FastRPC。
+6. **传感器。** 需要给 SLPI 上跑的高通 SEE 写一个主线客户端，走 QMI/FastRPC。
    **任何 SC8280XP 设备都没人做到过**，ThinkPad X13s 也没有。
-8. **摄像头。** 完全没碰。
+7. **摄像头。** 完全没碰。
 
 如果你手上有 MateBook E Go 想帮忙测，欢迎开 issue —— **报告哪里坏了和交补丁
 一样有用**。请附上你的 BIOS 版本和 SKU。

@@ -92,20 +92,15 @@ or from a mainline Linux install on the same hardware.
 
 ## 4. First boot
 
-Two to three minutes. Then, from a host with `adb`:
+Two to three minutes, and then you are done — there is no provisioning script
+to run. Screen-off timeout, captive-portal probe endpoints reachable from
+China, adb over TCP and the large-screen letterboxing behaviour are all baked
+into the image.
 
-```sh
-bash scripts/android-post-flash.sh
-```
-
-That sets the screen-off timeout, points captive-portal detection at an
-endpoint that is reachable from China, enables adb over TCP, and turns off the
-large-screen letterboxing that would otherwise stop games from going landscape.
-It lives in `/data`, so **re-run it after any userdata wipe**.
-
-**Connect Wi-Fi once by hand.** If the framework ever decides a network has no
-internet it disables it permanently, and only a user-initiated connection with
-a password clears that flag.
+**One manual step remains: connect Wi-Fi once by hand.** If the framework ever
+decides a network has no internet it marks it permanently disabled, and only a
+*user-initiated* connection with a password clears that flag. Nothing shipped
+in an image can do that for you.
 
 ## 5. Updating
 
@@ -129,7 +124,7 @@ and you copy the new `Image` onto the ESP yourself.
 | Reboots a few seconds in, nothing in any log | First-stage mount failed. `/sys/fs/pstore` will be **empty** — Android init calls `reboot()` rather than panicking, so pstore never sees it. Add `androidboot.init_fatal_panic=true` to the entry to turn that into a real panic that efi_pstore does capture |
 | Black screen, no menu | Secure Boot is still on, or the ESP was not written |
 | Boots but no GPU / no Wi-Fi / no sound | Firmware missing from `/vendor/firmware/` |
-| adb disappears after unplugging USB | Known ([#27](stage4-findings.md)). Use adb over TCP; `android-post-flash.sh` enables it |
+| adb disappears after unplugging USB | Known ([#27](stage4-findings.md)). adb over TCP on port 5555 is enabled by default (`persist.adb.tcp.port`) — `adb connect <ip>:5555`. Disable with `setprop persist.adb.tcp.port -1` if you would rather not have the listener |
 
 The rescue system is reachable over SSH on the LAN and can reflash everything.
 That is what it is for.
