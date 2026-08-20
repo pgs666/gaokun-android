@@ -193,6 +193,33 @@ OUT="${1:?用法: $0 <kernel-out-dir>}"
 #   依赖 EFI_GENERIC_STUB（本机已 =y）。
 ./scripts/config --file "$OUT/.config" --enable EFI_ZBOOT
 
+# ─── Stage 6 M14: Venus 硬件视频编解码（V4L2 M2M）───
+# ★ 为什么现在能做：三个前提本地核实过，一个都不缺。
+#   1. 时钟控制器【主线已有】：drivers/clk/qcom/videocc-sm8350.c 自己就认
+#      "qcom,sc8280xp-videocc"（该文件 :537 和 :572 两处），不需要新驱动。
+#   2. dt-bindings 头文件在：include/dt-bindings/clock/qcom,sm8350-videocc.h。
+#   3. ★固件我们【一直在装】：DTS 补丁把 firmware-name 指向
+#      qcom/sc8280xp/HUAWEI/gaokun3/qcvss8280.mbn，而 firmware/README.md 里
+#      那一行当初被我标成"语音服务（未用到，一并带上）"——
+#      **VSS = Video SubSystem，不是 Voice**。设备上实测在，2035748 字节。
+#
+# ⚠️★ 又是那个"=m 坑"，而且整条链上有五个。刷机前的实测值：
+#      CONFIG_MEDIA_SUPPORT=m   VIDEO_DEV=m   VIDEOBUF2_DMA_CONTIG=m
+#      V4L2_MEM2MEM_DEV=m       SM_VIDEOCC_8350=m
+#   Android 不加载任何模块（/vendor/lib/modules 不存在、lsmod 为空），
+#   所以就算 --enable VIDEO_QCOM_VENUS，整条链照样静默缺席。
+#   全部拉成 =y，并且下面 MUST_Y 里逐个断言 —— 这个坑本仓已经踩了 13 次。
+#
+# 依赖关系（drivers/media/platform/qcom/venus/Kconfig 原文）：
+#   depends on V4L_MEM2MEM_DRIVERS / VIDEO_DEV && QCOM_SMEM / ARCH_QCOM &&
+#              ARM64 && IOMMU_API
+#   select OF_DYNAMIC / QCOM_MDT_LOADER / QCOM_SCM / VIDEOBUF2_DMA_CONTIG /
+#          V4L2_MEM2MEM_DEV
+# ⚠️ SM_VIDEOCC_8350 会 `select SM_GCC_8350`（drivers/clk/qcom/Kconfig:1365），
+#    于是 SM8350 的 gcc 也会被编进来。无害（compatible 不匹配、永不 probe），
+#    但看到它出现在 .config 里不要当成配错了。
+./scripts/config --file "$OUT/.config"     --enable MEDIA_SUPPORT     --enable MEDIA_PLATFORM_SUPPORT     --enable VIDEO_DEV     --enable V4L_MEM2MEM_DRIVERS     --enable VIDEOBUF2_DMA_CONTIG     --enable V4L2_MEM2MEM_DEV     --enable SM_VIDEOCC_8350     --enable VIDEO_QCOM_VENUS
+
 # ─── olddefconfig + 断言（止损"=m 坑"）───
 # 这个坑已经踩了 13 次：`scripts/config --enable X` 写进去了，olddefconfig
 # 却可能因为依赖把它降回 =m（或压根没有该符号），而 Android **不加载任何模块**
@@ -217,6 +244,8 @@ SND_SOC_LPASS_RX_MACRO SND_SOC_LPASS_TX_MACRO SND_SOC_LPASS_VA_MACRO
 SND_SOC_LPASS_WSA_MACRO SND_SOC_QDSP6 QCOM_PD_MAPPER
 FUSE_FS IIO QCOM_SPMI_ADC5 QCOM_FASTRPC
 CPUSETS_V1 MEMCG_V1 UCLAMP_TASK UCLAMP_TASK_GROUP EFI_ZBOOT EFI_STUB EFI_GENERIC_STUB
+MEDIA_SUPPORT MEDIA_PLATFORM_SUPPORT VIDEO_DEV V4L_MEM2MEM_DRIVERS
+VIDEOBUF2_DMA_CONTIG V4L2_MEM2MEM_DEV SM_VIDEOCC_8350 VIDEO_QCOM_VENUS
 "
 bad=0
 for s in $MUST_Y; do
