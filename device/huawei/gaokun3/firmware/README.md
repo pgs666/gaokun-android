@@ -63,10 +63,8 @@ unzip -o 200.0.10.0.zip 'qc*.cab'
 
 ⚠️ 两个会把人绕进去的坑：
 * **`.cab` 解包失败时会静默产出 0 个文件**。我一度把"0 个文件"当成"包里没有
-  这个东西"，其实是传给 `expand.exe` 的路径末尾带了 ``
-  （Python 用 `open(...,'w')` 写清单时把 `
-` 翻成了 `
-`）。
+  这个东西"，其实是传给 `expand.exe` 的路径末尾带了 `\r`
+  （Python 用 `open(...,'w')` 写清单时把 `\n` 翻成了 `\r\n`）。
   **判据要看解出的文件数，而不是 find 的结果为空。**
 * NTFS 上直接看 DriverStore 时，`8280_qrd_*.json` 是**重解析点**
   （ntfs-3g 显示为 34 字节的 symlink，读会 FileNotFoundError）；
