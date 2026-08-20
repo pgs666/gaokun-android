@@ -29,8 +29,8 @@ recovery 分区，也没有串口。这不是一次常规移植 —— 它是 **
 | 触摸屏 | ✅ | Himax HX83121A；需要 `patches/` 里的 gpio174 补丁 |
 | 磁吸键盘 + 触控板 | ✅ | USB HID `12d1:10b8` |
 | Wi-Fi | ✅ | ath11k / WCN6855 |
-| 蓝牙 | ✅ | `hci_qca`，adapter `ON`，零崩溃 |
-| 扬声器 | ✅ | 用户实机确认；WSA883x 走 audioreach |
+| 蓝牙 | ⚠️ | 可用 —— `hci_qca`，adapter `ON`，开机后零崩溃。**但长期运行后可能与音频一起死锁**，见 [#38](docs/stage4-findings.md) |
+| 扬声器 | ⚠️ | 可用 —— 用户实机确认出声，WSA883x 走 audioreach。**但长期运行后音频可能死锁**，与蓝牙一起，见 [#38](docs/stage4-findings.md) |
 | 耳机口 / 麦克风 | ❓ | 插拔检测和 15 个 HPH 控件都在，**未实测** |
 | 电池、充电、合盖检测 | ✅ | 华为 EC 驱动 |
 | **游戏** | ✅ | 原神画质极高流畅。GPU 空闲 270 MHz、峰值 690 MHz、最高 50 °C |
@@ -149,6 +149,7 @@ Android 相关的配置断言在
 | 问题 | 位置 |
 |---|---|
 | s2idle 醒不回来，整机复位 | [`docs/stage6-crdroid.md`](docs/stage6-crdroid.md) §M4 |
+| **音频与蓝牙在长期运行后可能死锁** —— 用户实机报告，尚未复现定位。两者都走同一条到 DSP 的 QRTR/FastRPC 通路，而那条通路上我们已经实测到过会话级卡死 | [#38](docs/stage4-findings.md) |
 | 传感器：Linux 侧加速度计已能正确读数，但 Android 侧尚无 HAL；使能光感会弄坏 DSP 会话（#37） | [`docs/stage4-findings.md`](docs/stage4-findings.md) |
 | 拔插 USB 后 adb 不重枚举，用 adb over TCP 兜底（#27） | [`docs/stage4-findings.md`](docs/stage4-findings.md) |
 | GPU SMMU 拉的是 SPI 675/680，而 DT 声明 678/679 | [`docs/stage5-freedreno.md`](docs/stage5-freedreno.md) D6 |

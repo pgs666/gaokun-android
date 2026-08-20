@@ -34,8 +34,8 @@ Everything below was measured on hardware, not inferred. The evidence is in
 | Touchscreen | ✅ | Himax HX83121A; needs the gpio174 patch in `patches/` |
 | Detachable keyboard + touchpad | ✅ | USB HID `12d1:10b8` |
 | Wi-Fi | ✅ | ath11k / WCN6855 |
-| Bluetooth | ✅ | `hci_qca`; adapter `ON`, zero crashes |
-| Speakers | ✅ | User-confirmed; WSA883x via audioreach |
+| Bluetooth | ⚠️ | Works — `hci_qca`, adapter `ON`, zero crashes at boot. **But it can deadlock after long uptime**, together with audio; see [#38](docs/stage4-findings.md) |
+| Speakers | ⚠️ | Works — user-confirmed, WSA883x via audioreach. **But audio can deadlock after long uptime**, together with Bluetooth; see [#38](docs/stage4-findings.md) |
 | Headphone jack / microphone | ❓ | Jack detection and 15 HPH mixer controls exist; untested |
 | Battery, charging, lid switch | ✅ | Huawei EC driver |
 | **Gaming** | ✅ | Genshin Impact at max graphics, smooth. GPU idles at 270 MHz, peaks 690 MHz, 50 °C |
@@ -163,6 +163,7 @@ conclusions were later overturned. Several of them were.
 | Issue | Where |
 |---|---|
 | s2idle resume fails; the machine resets | [`docs/stage6-crdroid.md`](docs/stage6-crdroid.md) §M4 |
+| **Audio and Bluetooth can deadlock after long uptime** — reported on device, not yet reproduced or diagnosed. Both ride the same QRTR/FastRPC path to the DSPs, where we have already measured session-level lockups | [#38](docs/stage4-findings.md) |
 | Sensors: the accelerometer reads correctly on Linux, but there is no Android HAL yet; enabling the ALS breaks the DSP session (#37) | [`docs/stage4-findings.md`](docs/stage4-findings.md) |
 | USB re-enumeration drops adb after unplug — use adb over TCP (#27) | [`docs/stage4-findings.md`](docs/stage4-findings.md) |
 | GPU SMMU raises SPI 675/680 while the DT declares 678/679 | [`docs/stage5-freedreno.md`](docs/stage5-freedreno.md) D6 |
