@@ -29,10 +29,6 @@ jobs:
         with:
           path: gaokun-android
 
-      - name: Clone EGoTouchRev-Linux
-        run: |
-          git clone --depth=1 https://github.com/chiyuki0325/EGoTouchRev-Linux.git EGoTouchRev-Linux
-
       - name: Clone linux-gaokun-buildbot
         run: |
           git clone --depth=1 https://github.com/KawaiiHachimi/linux-gaokun-buildbot.git linux-gaokun-buildbot
@@ -56,12 +52,12 @@ jobs:
           git am ../linux-gaokun-buildbot/patches/media/*.patch
           git am ../linux-gaokun-buildbot/patches/0099-arm64-gaokun3-import-local-dts-and-defconfig.patch
 
-      - name: Replace Himax driver with EGoTouchRev-Linux
+      - name: Replace Himax driver with vendored EGoTouchRev-Linux
         run: |
-          cp EGoTouchRev-Linux/touchscreen-hx83121a-dkms/himax-spi-core.c linux/drivers/input/touchscreen/
-          cp EGoTouchRev-Linux/touchscreen-hx83121a-dkms/hx-algo.c        linux/drivers/input/touchscreen/
-          cp EGoTouchRev-Linux/touchscreen-hx83121a-dkms/hx-algo.h        linux/drivers/input/touchscreen/
-          cp EGoTouchRev-Linux/touchscreen-hx83121a-dkms/hx-frame-status.h linux/drivers/input/touchscreen/
+          cp gaokun-android/device/huawei/gaokun3/egotouch-driver/himax-spi-core.c linux/drivers/input/touchscreen/
+          cp gaokun-android/device/huawei/gaokun3/egotouch-driver/hx-algo.c        linux/drivers/input/touchscreen/
+          cp gaokun-android/device/huawei/gaokun3/egotouch-driver/hx-algo.h        linux/drivers/input/touchscreen/
+          cp gaokun-android/device/huawei/gaokun3/egotouch-driver/hx-frame-status.h linux/drivers/input/touchscreen/
 
       - name: Set up ccache
         uses: actions/cache@v4
