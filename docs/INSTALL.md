@@ -26,9 +26,7 @@ Download from [Releases](../../releases) and unpack into one directory:
 | File | What it is |
 |---|---|
 | `super.img.zst` | system / system_ext / product / vendor |
-| `Image` | Kernel (mainline + the gaokun patch stack) |
-| `sc8280xp-huawei-gaokun3.dtb` | Device tree |
-| `ramdisk.img` | First-stage init |
+| `boot.img` | Kernel, device tree and first-stage ramdisk in one standard Android boot image (header v2). Written to both `boot_a` and `boot_b`; the installer also unpacks it onto the ESP for systemd-boot |
 | `crDroidAndroid-*.zip` | The OTA package. **Not needed to install** — this is what the updater consumes later |
 
 ```sh
@@ -54,10 +52,11 @@ What you end up with:
 
 | Partition | Size | Purpose |
 |---|---|---|
-| `esp` | 300 MiB | systemd-boot, kernels, ramdisks |
+| `esp` | 300 MiB | systemd-boot, plus the kernel/DTB/ramdisk it actually loads, one directory per slot |
 | `misc` | 4 MiB | A/B slot state (`bootloader_control`) |
 | `metadata` | 32 MiB | Android metadata |
 | `super` | 12 GiB | The dynamic partitions, A/B |
+| `boot_a`, `boot_b` | 64 MiB each | Android boot images, A/B. These are what OTA updates; the ESP copies are unpacked from them |
 | `rescue` | 24 GiB | **A full Linux — this machine's recovery environment** |
 | `userdata` | rest | `/data` |
 
@@ -113,9 +112,20 @@ systemd-boot's `loader.conf` — see
 [`device/huawei/gaokun3/boot_control/`](../device/huawei/gaokun3/boot_control/)
 for how, and why the stock HAL cannot work here.
 
-**Kernel updates are out of band.** `boot` is deliberately not in
-`AB_OTA_PARTITIONS`, so a release that changes the kernel says so in its notes
-and you copy the new `Image` onto the ESP yourself.
+**Kernel updates arrive over OTA too**, as of 2026-08-20. `boot_a`/`boot_b` are
+real Android boot partitions and `boot` is in `AB_OTA_PARTITIONS`, so a kernel
+change ships as an ordinary update.
+
+There is one extra step under the hood, because systemd-boot cannot read an
+Android boot image: after `update_engine` has written the inactive slot, a
+postinstall hook unpacks that slot's boot image and drops the kernel, DTB and
+ramdisk into a per-slot directory on the ESP. The boot partitions are the
+source of truth; the ESP copies are derived. Since the hook only ever writes
+into the slot it just flashed, an update cannot touch the kernel you are
+currently running — which is what makes rollback safe.
+
+If the hook fails (the usual reason is a full ESP), the whole update fails
+loudly rather than leaving you with a new system and an old kernel.
 
 ## If it will not boot
 
