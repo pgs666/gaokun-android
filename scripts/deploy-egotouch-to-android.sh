@@ -79,6 +79,7 @@ echo "== 从 $BOOT_A 解出 ramdisk / cmdline =="
 python3 - "$BOOT_A" "$RAMDISK_DIR" <<'PYEOF'
 import struct, sys, os
 img, out = sys.argv[1], sys.argv[2]
+os.makedirs(out, exist_ok=True)
 with open(img, "rb") as f:
     hdr = f.read(1664)
     if hdr[:8] != b"ANDROID!":
@@ -165,15 +166,11 @@ hdr[576:608] = b'\x00' * 32
 
 with open(out_path, "wb") as out:
     out.write(hdr)
-    # kernel
+    out.write(b'\x00' * (align(len(hdr), page) - len(hdr)))  # header 按 page 对齐
     out.write(kernel)
     out.write(b'\x00' * (align(len(kernel), page) - len(kernel)))
-    # ramdisk
     out.write(ramdisk)
     out.write(b'\x00' * (align(len(ramdisk), page) - len(ramdisk)))
-    # second (0)
-    # recovery_dtbo (0)
-    # dtb
     out.write(dtb)
     out.write(b'\x00' * (align(len(dtb), page) - len(dtb)))
 
@@ -201,6 +198,7 @@ sudo mkdir -p "$MNT/$MID/android/slot_a"
 python3 - "$BOOT_A" "$MNT/$MID/android/slot_a" <<'PYEOF'
 import struct, sys, os
 img, out = sys.argv[1], sys.argv[2]
+os.makedirs(out, exist_ok=True)
 with open(img, "rb") as f:
     hdr = f.read(1664)
     if hdr[:8] != b"ANDROID!":
