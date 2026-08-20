@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Captive-portal probe endpoints that are actually reachable from China.
+
+  Why this matters more than it looks: if the framework ever concludes a
+  network has no internet, it marks it
+  NETWORK_SELECTION_DISABLED_NO_INTERNET_PERMANENT and will not auto-join it
+  again — and only a fresh user-initiated connection with a password clears
+  that. The stock probes are connectivitycheck.gstatic.com and
+  www.google.com, both unreachable here, so every boot used to poison the
+  saved network. That was stage4 finding #29, and it kept coming back.
+
+  ★ The override has to target config_captive_portal_*_url, NOT
+  default_captive_portal_*_url. NetworkStack says so itself, in
+  packages/modules/NetworkStack/res/values/config.xml:10-15: the default_*
+  strings are deliberately not overlayable and touching them "will break if
+  the enforcement of overlayable starts". The config_* names are the ones
+  listed in that module's <overlayable name="NetworkStackConfig"> block, with
+  policy product|system|vendor.
+
+  This is a build-time overlay *of an existing RRO* rather than a new RRO:
+  crDroid already ships vendor/lineage/overlay/rro_packages/NetworkStackOverlay
+  (it sets config_dhcp_client_hostname), so the packaging, manifest and
+  targetName are already correct and we only add resources to it.
+-->
+<resources>
+    <string name="config_captive_portal_https_url" translatable="false">https://connect.rom.miui.com/generate_204</string>
+    <string name="config_captive_portal_http_url" translatable="false">http://connect.rom.miui.com/generate_204</string>
+</resources>

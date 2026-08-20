@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Settings defaults, applied when the settings database is first created.
+
+  ⚠️ These only take effect on a *fresh* /data. Once a value exists in the
+  settings DB, the default is never consulted again — which is exactly the
+  semantics wanted here, because this is replacing a script that only ever
+  needed to run after a userdata wipe.
+-->
+<resources>
+
+    <!--
+      AOSP default is 60000 (frameworks/base/packages/SettingsProvider/res/
+      values/defaults.xml:21). Two minutes suits a 12.35" tablet better, and
+      it is safe on this machine: s2idle is broken so a wakelock is held, and
+      turning the screen off does not attempt a suspend.
+    -->
+    <integer name="def_screen_off_timeout">120000</integer>
+
+</resources>
