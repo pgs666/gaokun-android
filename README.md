@@ -165,7 +165,7 @@ conclusions were later overturned. Several of them were.
 | s2idle resume fails; the machine resets | [`docs/stage6-crdroid.md`](docs/stage6-crdroid.md) §M4 |
 | **No working recovery.** The image builds and ships, but booting it reset-loops the machine, so the boot entry is not created. Costs: no `adb sideload`, no `fastbootd`, and *Erase all data* in Settings probably does nothing (it asks the bootloader for recovery, and systemd-boot does not read that request) | [#39](docs/stage4-findings.md) |
 | **Audio and Bluetooth can deadlock after long uptime** — reported on device, not yet reproduced or diagnosed. Both ride the same QRTR/FastRPC path to the DSPs, where we have already measured session-level lockups | [#38](docs/stage4-findings.md) |
-| Sensors: the accelerometer reads correctly on Linux, but there is no Android HAL yet; enabling the ALS breaks the DSP session (#37) | [`docs/stage4-findings.md`](docs/stage4-findings.md) |
+| Enabling the ambient light sensor returns no readings *and* poisons the whole DSP session, so there is no auto-brightness (#37) | [`docs/stage4-findings.md`](docs/stage4-findings.md) |
 | USB re-enumeration drops adb after unplug — use adb over TCP (#27) | [`docs/stage4-findings.md`](docs/stage4-findings.md) |
 | GPU SMMU raises SPI 675/680 while the DT declares 678/679 | [`docs/stage5-freedreno.md`](docs/stage5-freedreno.md) D6 |
 | The thermal HAL is the AOSP mock, and its SHUTDOWN threshold is 36 °C | [`docs/stage6-crdroid.md`](docs/stage6-crdroid.md) §M4 |
@@ -173,6 +173,11 @@ conclusions were later overturned. Several of them were.
 ---
 
 ## Help wanted
+
+The full backlog — with the concrete first step for each item, and the reasons
+behind everything that is parked — lives in [`docs/TODO.md`](docs/TODO.md).
+What follows is the curated subset worth someone's weekend.
+
 
 Concrete, well-scoped work, roughly easiest first:
 
