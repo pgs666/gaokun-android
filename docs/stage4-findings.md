@@ -657,8 +657,11 @@ Mount matrix provided by firmware is all 0, falling back to identity matrix!
 `$WIN/DriverData/Qualcomm/fastRPC/persist/sensors/registry/registry` ——
 那是**机器出厂时写在本机 Windows 里的**，不在任何驱动包里，
 而本机 Windows 已于 2026-08-20 抹除 → **这份校准数据永久丢失，Phase 10 做不了。**
-后果：加速度计能用，但轴向可能需要在上层手动纠正（自动旋转方向可能颠倒），
-且没有出厂 bias 补偿。⚠️ **给后人**：还留着 Windows 的机器，
+后果：没有出厂 bias 补偿。
+★**但轴向无害**：2026-08-20 用户实机确认**自动旋转方向正确** ——
+libssc 退回的单位矩阵恰好与面板方向一致，**不需要在上层纠正**。
+（所以"安装矩阵全零"这条只影响精度，不影响可用性。）
+⚠️ **给后人**：还留着 Windows 的机器，
 **先把那个 registry 目录拷出来再装系统。**
 
 #### 落地路线更新
@@ -674,7 +677,8 @@ Mount matrix provided by firmware is all 0, falling back to identity matrix!
 | **Android 侧读数** | ✅ **已通**（2026-08-20）：自研客户端 `device/huawei/gaokun3/ssc/` 在 Android 上读出 `accel` Z≈9.88 m/s² accuracy=3、`gyro` 静止≈0 rad/s。规格见 [`sensors-ssc-protocol.md`](sensors-ssc-protocol.md) |
 | 本机传感器清单（SSC 亲口回答）| `accel` ✅ / `gyro` ✅ / `mag` ❌ **本机无磁力计** / `rotv` ❌ 未注册 / `ambient_light` ❌ 污染会话 |
 | **AIDL sensors HAL** | ✅ **已实现并实机验证**（2026-08-20）：`device/huawei/gaokun3/sensors-hal/`，SensorService 里能看到 `SH3001 Accelerometer` / `SH3001 Gyroscope`，事件值 `-0.04, 0.05, 9.88` 正在流入，消费者是自动旋转的 `WindowOrientationListener`。★框架还自动融合出 Game Rotation Vector / Gravity / Linear Acceleration |
-| 仍欠 | sepolicy（现 permissive）、**轴向标定**（安装矩阵全零，方向可能颠倒）、`CONFIG_QCOM_FASTRPC=y`（重启后要跑 `scripts/sensors-up-android.sh` 手动补）|
+| 轴向 | ✅ **用户实机确认自动旋转方向正确**，单位矩阵即可，无需纠正 |
+| 仍欠 | sepolicy（现 permissive）、`CONFIG_QCOM_FASTRPC=y`（重启后要跑 `scripts/sensors-up-android.sh` 手动补）、把这套编进 ROM |
 
 ⚠️ 另有两个环境坑（都会浪费大量时间）：
 * `droid-juicer` 会**无限 `openat("/usr/share/droid-juicer/configs")` 死循环**

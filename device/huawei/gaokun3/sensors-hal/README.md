@@ -67,9 +67,11 @@ SH3001 Accelerometer: last 50 events
 
 * ⬜ **sepolicy**：现在跑在 permissive 下，logcat 里有一串 `avc: denied`
   （`execute_no_trans` / `add` 到 `hal_sensors_service` 等）。转 enforcing 前必须补。
-* ⬜ **轴向标定**：SSC 报的安装矩阵**全零**（出厂校准随 Windows 永久丢失，见 #37），
-  我们直接用了传感器自身坐标系。屏幕方向与传感器轴向的关系**尚未实机标定**
-  —— 自动旋转可能方向颠倒或反向，要对着实机转一圈确定后在 HAL 里纠正。
+* ✅ **轴向：不用改。** SSC 报的安装矩阵**全零**（出厂校准随 Windows 永久丢失，
+  见 #37），所以我们直接用了传感器自身坐标系 —— 2026-08-20 用户实机确认
+  **自动旋转方向正确**。运气好：单位矩阵恰好与本机面板方向一致。
+  ⚠️ 别据此以为所有 gaokun3 都一样；换面板批次的机器若发现方向反了，
+  纠正点就在 `Sensor.cpp` 的两个 `readEventPayload` 里。
 * ⬜ **`CONFIG_QCOM_FASTRPC=y`**：还是 `=m`，所以每次重启 `/dev/fastrpc-*` 不存在，
   要跑 `scripts/sensors-up-android.sh` 手动补。断言已进
   `scripts/kernel-config-android.sh`，等下次编内核。

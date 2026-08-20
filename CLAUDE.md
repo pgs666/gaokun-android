@@ -5,7 +5,7 @@
 在华为 MateBook E Go（Snapdragon 8cx Gen 3 / sc8280xp，代号 gaokun）上跑原生 AOSP，
 最终目标是能稳定运行 arm64 手游。
 
-**当前阶段：Stage 6 M12 — ★★传感器整条打通：sensors HAL 已把真读数喂进 SensorService，自动旋转接上；欠轴向标定与 sepolicy**（每次开工时更新这一行）
+**当前阶段：Stage 6 M12 完成 — ★★自动旋转可用（用户实机确认方向正确）；传感器只欠 sepolicy 与内核 =y**（每次开工时更新这一行）
 
 > **★★ Stage 6 M12（2026-08-20）：sensors HAL 落地，自动旋转接上。**
 >
@@ -39,7 +39,8 @@
 > - ⚠️ **`adb shell stop; start` 会连带断 WiFi**（网络由框架管），
 >   adb over TCP 当场掉线，而且回来时 IP 会变。别当成机器挂了。
 > - ⬜ **欠三样**：sepolicy（现 permissive，logcat 一串 avc denied）、
->   ★**轴向标定**（安装矩阵全零，自动旋转方向可能是反的，要对着实机转一圈定）、
+>   ~~轴向标定~~ ★**已由用户实机确认方向正确，不需要纠正**（安装矩阵全零
+>   → 单位矩阵，而传感器坐标系本来就与面板一致，运气好）、
 >   `CONFIG_QCOM_FASTRPC=y`（现仍 `=m`，重启后要跑
 >   `scripts/sensors-up-android.sh` 手动补）。
 > - ⚠️ 另记：**boot_control HAL 会把默认启动项改成当前槽位的 Android 条目**
@@ -136,8 +137,10 @@
 >   close/openat/readdir/read/stat/seek，**没有 write，只读是设计使然**；
 >   且 DSP 想写的那个目录是 `hfs_mkdir` 出来的虚拟目录，没有后端可写。属上游活。
 > - ❌ **出厂校准永久丢失**：它存在本机 Windows 的 DriverData 里、不在任何驱动包中，
->   而本机 Windows 已抹除 → **安装矩阵全零**（libssc 退回单位矩阵），轴向可能要
->   在上层纠正。⚠️ **给还留着 Windows 的人：先把那个 registry 目录拷出来再装系统。**
+>   而本机 Windows 已抹除 → **安装矩阵全零**（libssc 退回单位矩阵）。
+>   ★**但实测无害**：M12 用户确认自动旋转方向正确 —— 单位矩阵恰好与面板方向
+>   一致，不需要在上层纠正。丢的只是 bias 补偿那点精度。
+>   ⚠️ **给还留着 Windows 的人：先把那个 registry 目录拷出来再装系统。**
 > - ⚠️ 两条我自己下错又更正的判断：①"registry 服务起不来所以光感失败"——错，
 >   那份 debug 日志是在**我自己装出来的坏状态**下抓的（**诊断日志必须在已知
 >   good 状态下重抓**）；②"`Handover signaled` 是 SLPI 崩溃循环"——错，良性噪声，

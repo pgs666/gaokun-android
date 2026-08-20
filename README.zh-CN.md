@@ -36,7 +36,7 @@ recovery 分区，也没有串口。这不是一次常规移植 —— 它是 **
 | **游戏** | ✅ | 原神画质极高流畅。GPU 空闲 270 MHz、峰值 690 MHz、最高 50 °C |
 | CPU 温控降频 | ✅ | 主线 DTS **根本没有** CPU 的 cooling map —— 已由 [`patches/0009`](patches/) 在设备树里根治 |
 | **待机 / 挂起** | ❌ | s2idle **挂得下去、醒不回来**，随后整机复位。内核/EC 缺陷 —— Ubuntu 下同样复现 |
-| 传感器（加速度计+陀螺仪）| ⚠️ | **整条打通**：为本机写的 sensors HAL 已把真实读数喂给 SensorService，框架据此自动融合出 Game Rotation Vector / Gravity / Linear Acceleration。自动旋转已接上，但**轴向还没标定** —— 出厂安装矩阵全零，旋转方向可能是反的。本机**没有磁力计**（所以没有指南针）；光感一使能就会污染整个 DSP 会话 |
+| 传感器（加速度计+陀螺仪）| ✅ | **自动旋转可用，用户实机确认方向正确。** 为本机写的 sensors HAL 已把真实读数喂给 SensorService，框架据此自动融合出 Game Rotation Vector / Gravity / Linear Acceleration。出厂安装矩阵全零（校准数据随 Windows 一起没了），但实测传感器坐标系与面板方向本来就一致，**不需要纠正**。本机**没有磁力计**（所以没有指南针）；光感一使能就会污染整个 DSP 会话，见 [#37](docs/stage4-findings.md) |
 | 硬件视频解码 | ❌ | Venus 未启用；66 个编解码器全是软解 |
 | 摄像头 | ❌ | 没开始 |
 | USB-C 外接显示 / UCSI | ❌ | UCSI PPM 初始化超时，本机主线的已知缺陷 |
@@ -171,17 +171,15 @@ Android 相关的配置断言在
 4. **SELinux 转 enforcing。** 有两个服务需要写策略。
 5. **s2idle 的 resume。** 要先编一个带 `CONFIG_PM_DEBUG` 的内核才能二分
    （现在的配置里没有 `/sys/power/pm_test`）。多半是上游内核/EC 的活。
-6. **传感器 —— 难的那一半已经做完了。** 加速度计现在能在本机经 SLPI DSP
-   正确读数（`hexagonrpcd` + `libssc`，
-   [`scripts/slpi-sensors-setup.sh`](scripts/slpi-sensors-setup.sh) 能一键复现）。
-   据我们所知，**其他 SC8280XP 设备都没有跑通过这一套**，ThinkPad X13s 也没有。
-   缺的是 **Android 侧**。`hexagonrpcd` **已经能在 Android 上构建并运行**，
-   SSC 服务也已在 QRTR 上就绪 —— 剩下的是一个 QMI/protobuf 客户端，
-   再包成 AIDL `android.hardware.sensors` HAL。libssc 本身搬不过来
-   （它拖着 glib/gobject/libqmi），所以协议要重写 —— 而**协议已经替你写清楚了**，
-   连字节布局和消息 ID 都有：
-   [`docs/sensors-ssc-protocol.md`](docs/sensors-ssc-protocol.md)。
-   **就靠这一块活，自动旋转就能落地。**
+6. **传感器 —— 剩 sepolicy 与一个内核开关。** 传感器本体已经做完：
+   加速度计与陀螺仪经 SLPI DSP 进到为本机写的 HAL，**自动旋转可用**。
+   据我们所知其他 SC8280XP 设备都没跑通过这一套，ThinkPad X13s 也没有 ——
+   协议整理在 [`docs/sensors-ssc-protocol.md`](docs/sensors-ssc-protocol.md)，
+   想在自己机器上做可以直接拿。这里剩两个尾巴：HAL 与 `hexagonrpcd`
+   都还没写 sepolicy（现在靠 `permissive` 顶着）；`CONFIG_QCOM_FASTRPC` 仍是
+   `=m` 而这棵树不发模块，所以每次重启都要手动把 fastrpc 节点弄出来。
+   **环境光传感器是另一个更硬的问题**：使能后不但不返回读数，还会污染整个
+   SSC 会话，所以没有自动亮度。
 7. **摄像头。** 完全没碰。
 
 如果你手上有 MateBook E Go 想帮忙测，欢迎开 issue —— **报告哪里坏了和交补丁

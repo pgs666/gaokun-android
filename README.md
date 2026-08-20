@@ -41,7 +41,7 @@ Everything below was measured on hardware, not inferred. The evidence is in
 | **Gaming** | ✅ | Genshin Impact at max graphics, smooth. GPU idles at 270 MHz, peaks 690 MHz, 50 °C |
 | CPU thermal throttling | ✅ | Mainline DTS has **no** CPU cooling maps at all — fixed in [`patches/0009`](patches/) |
 | **Suspend / standby** | ❌ | s2idle **resumes into a reset**. Kernel/EC bug — reproduces identically under Ubuntu |
-| Sensors (accel + gyro) | ⚠️ | **Working end to end**: a sensors HAL written for this port feeds real accelerometer and gyroscope data to SensorService, and the framework derives Game Rotation Vector / Gravity / Linear Acceleration from them. Auto-rotate is wired up but **the axis orientation has not been calibrated yet** — the factory mount matrix is all zeros, so rotation may come out mirrored. This machine has **no magnetometer** (so no compass), and enabling the ALS poisons the DSP session |
+| Sensors (accel + gyro) | ✅ | **Auto-rotate works, confirmed on device.** A sensors HAL written for this port feeds real accelerometer and gyroscope data to SensorService, and the framework derives Game Rotation Vector / Gravity / Linear Acceleration from them. The factory mount matrix is all zeros (that calibration data died with Windows), but the sensor frame turns out to match the panel, so no correction was needed. This machine has **no magnetometer** (so no compass), and enabling the ALS poisons the DSP session — see [#37](docs/stage4-findings.md) |
 | Hardware video decode | ❌ | Venus not enabled; 66 software codecs only |
 | Camera | ❌ | Not started |
 | USB-C DisplayPort / UCSI | ❌ | UCSI PPM init times out — a known mainline defect on this machine |
@@ -187,18 +187,19 @@ Concrete, well-scoped work, roughly easiest first:
 5. **s2idle resume.** Needs a kernel with `CONFIG_PM_DEBUG` to bisect —
    `/sys/power/pm_test` does not exist in the shipped config. Probably upstream
    kernel/EC work.
-6. **Sensors — the hard half is already done.** The accelerometer now reads
-   correctly on this machine through the SLPI DSP, using `hexagonrpcd` and
-   `libssc` ([`scripts/slpi-sensors-setup.sh`](scripts/slpi-sensors-setup.sh)
-   reproduces it end to end). As far as we know no other SC8280XP device has
-   this working, the ThinkPad X13s included. What is missing is the **Android**
-   side. `hexagonrpcd` is **already building and running under Android**, and
-   the SSC service is live on QRTR — what is left is a QMI/protobuf client and
-   an AIDL `android.hardware.sensors` HAL around it. libssc itself cannot be
-   ported (it pulls in glib/gobject/libqmi), so the protocol has to be
-   reimplemented — and it is written down for you, byte layouts and message IDs
-   included, in [`docs/sensors-ssc-protocol.md`](docs/sensors-ssc-protocol.md).
-   That one piece of work is what stands between this port and auto-rotate.
+6. **Sensors — SELinux policy and a kernel flag.** The sensor stack itself is
+   done: accelerometer and gyroscope run through the SLPI DSP into a
+   purpose-written HAL, and auto-rotate works. As far as we know no other
+   SC8280XP device has this working, the ThinkPad X13s included — the protocol
+   is written up in
+   [`docs/sensors-ssc-protocol.md`](docs/sensors-ssc-protocol.md) if you want
+   it for yours. Two loose ends here: no sepolicy has been written for the HAL
+   or for `hexagonrpcd` (they run under `permissive` today), and
+   `CONFIG_QCOM_FASTRPC` is still `=m` while this tree ships no modules, so the
+   fastrpc device nodes have to be created by hand after each boot. The
+   **ambient light sensor** is a harder, separate problem: enabling it returns
+   no readings *and* poisons the whole SSC session, so there is no
+   auto-brightness.
 7. **Camera.** Untouched.
 
 If you have a MateBook E Go and want to test, open an issue — reports of what
