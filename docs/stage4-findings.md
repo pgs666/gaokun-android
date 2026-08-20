@@ -552,13 +552,11 @@ ntfs-3g 显示为 `-> unsupported reparse tag 0x80000017`、`stat` 只有 34 字
 
 #### 两个已知的坑（贡献者踩出来的，转录以免重犯）
 
-1. **DSP 固件请求的路径带尾随 `
-`**（它是在 Windows 上编译的）。两处要分别处理：
+1. **DSP 固件请求的路径带尾随 `\r`**（它是在 Windows 上编译的）。两处要分别处理：
    * socinfo 走真实文件系统 → 建 `名字
 ` 的 symlink 即可；
    * registry 走 hexagonfs 的**内部 VFS**、不经过内核 symlink 解析
-     → **必须改 `hexagonrpcd/hexagonfs.c`**，在每段路径末尾截掉 `
-`。
+     → **必须改 `hexagonrpcd/hexagonfs.c`**，在每段路径末尾截掉 `\r`。
      apt 里的现成版本不带这个补丁，所以必须自己编。
 2. **`hexagonrpcd` 的 shell wrapper 不认识 sc8280xp**，会 fallback 到错误的
    DSP；必须直接调二进制并显式给 `-f /dev/fastrpc-sdsp -d sdsp -s -R <VFS 根>`。
@@ -572,3 +570,111 @@ Linux 写的。先在内置的救援系统上跑通 `ssccli`，能一次性验�
 用 fastrpc ioctl + 一个 VFS，可移植性不差，但要写 Android.bp 和 sepolicy），
 再写一个 AIDL `android.hardware.sensors` HAL 把 libssc 的逻辑包起来喂
 SensorService。**那一块目前不存在，是独立的工程量。**
+
+---
+
+### ★★ 实测结果（2026-08-20，救援 Linux 上全程实机）
+
+**结论：加速度计真的通了；光感通不了。** 于是「自动旋转」在本机是**可达的**，
+而「自动亮度」不可达。这是本条从"不可达"到"部分可达"的最终定性。
+
+#### ✅ 加速度计：整条 DSP 通路验证通过
+
+```
+Accelerometer sensor measurement: X=-0.052672 Y=0.114922 Z=9.873688 m/s²
+```
+
+机器平放，Z ≈ **9.87 m/s²**（重力），X/Y 近零；15 秒稳定输出 **131 行**读数。
+这一个数字同时证明了整条链路：
+`fastrpc → hexagonfs（含 \r 截断补丁）→ DSP 注册表 → SSC → QMI → libssc`。
+
+配置要点（与贡献者指南一致，逐条实测）：
+* `hw_platform=QRD` / `soc_id=449` —— ★**独立佐证**：内核
+  `/sys/devices/soc0/soc_id` **就是 449**、`machine` 是 `SC8280XP`；
+  而 26 个 JSON 里 `QRD` 出现 25 次、`449` 出现 23 次。三方一致。
+* `sensors/registry/registry` **必须是空文件**（DSP 找不到覆盖值就用默认值）。
+* 恢复手段 = `systemctl restart hexagonrpcd`。⚠️ **需要沉降时间**：
+  重启后 6 秒就读，实测拿到 0 行；隔久一点再读才有 131 行。
+  所以"重启后读不到"**不等于**坏了，别据此下结论。
+
+#### ⚠️ 光感（tcs3701）：使能后从不返回读数
+
+硬件是在的（`tcs3701.json`，ams 光感+接近，I2C bus 5 / 地址 0x39）。
+libssc 的日志显示 registry 服务可用、传感器被发现、
+`Sensor enable request sent successfully` —— **然后就再也没有读数**。
+同一次会话里 QRTR 节点 9 曾整体消失又重建（服务 400 一并消失）。
+更麻烦的是：**尝试过 light 之后，连加速度计也读不到了**，必须重启
+`hexagonrpcd` 才恢复 → 光感的使能会**污染整个 SSC 会话**。
+
+⚠️ **两条我自己下错又更正的判断，记下来免得后人重犯**：
+1. ❌ "`registry` 传感器起不来，所以光感失败" —— **错**。那份
+   `G_MESSAGES_DEBUG` 日志是在**装了生成注册表的坏状态**下抓的。
+   加速度计能出数本身就证明 registry 服务是可用的。
+   **判据：诊断日志必须在已知good状态下重抓，否则读的是自己制造的故障。**
+2. ❌ "`qcom_q6v5_pas 2400000.remoteproc: Handover signaled, but it already
+   happened` 是 SLPI 崩溃循环" —— **错，那是良性噪声**。对照实验：空闲 12 秒
+   0 条，跑 light 12 秒 13 条，**但跑加速度计（工作正常）12 秒也是 13 条**。
+   任何传感器会话都会伴生它。（`2400000.remoteproc` 的 `name` 确实是 `slpi`。）
+
+#### ❌ 负面结果：`sscregistrygen` 预生成注册表会**弄坏**加速度计
+
+思路本来很顺：hexagonrpcd 自带 `tools/sscregistrygen`，用法就写在源码头上
+（`-p <平台> -s <soc_id> <配置目录> <输出目录>`，按 JSON 里 `config`
+子对象下的 `hw_platform`/`soc_id` 过滤）。跑 `-p QRD -s 449` 生成了
+**142 个**文件，其中确实有 `default_sensors.ambient_light`。
+
+**结果：光感照旧没有读数，而加速度计也一起坏了**（`Unable to initialize …`）。
+把 141 个文件挪走、只留回空 `registry` 文件并重启 → **加速度计当场恢复**。
+干净的 A/B，因果明确。→ **本机不要预生成注册表，空 registry 才是对的。**
+
+#### ★ 为什么"实现写入"不是一个小补丁
+
+DSP 每秒几十次请求写 `/persist/sensors/registry/registry/../temp.json`，
+`hexagonrpcd/apps_std.c` 对 `w`/`a` 模式直接返回 `AEE_EUNSUPPORTED`。
+本来以为补上写入就能解决，但查了 `hexagonfs.h:34-45` 的 ops 表：
+
+```c
+struct hexagonfs_file_ops {
+        close / from_dirent / openat / readdir / read / stat / seek
+};
+```
+
+**没有 write 钩子，整个 VFS 是设计上只读的。** 而且那个 `..` 解析出来的
+`/persist/sensors/registry/` 是 `rpcd_builder.c:163-166` 用 `hfs_mkdir`
+建的**虚拟目录**，不落盘 —— 就算加了写钩子也没有后端可写，还得先把它改成
+映射到真实可写目录。这是给上游加功能，不是打补丁。**别低估这一块。**
+
+#### ⚠️ 出厂校准已随 Windows 永久消失（安装矩阵全零）
+
+每次读数都伴随一条告警：
+
+```
+Mount matrix provided by firmware is all 0, falling back to identity matrix!
+```
+
+安装矩阵（把芯片坐标系旋到屏幕坐标系）全零，libssc 退回单位矩阵。
+指南 Phase 10 的校准来源是
+`$WIN/DriverData/Qualcomm/fastRPC/persist/sensors/registry/registry` ——
+那是**机器出厂时写在本机 Windows 里的**，不在任何驱动包里，
+而本机 Windows 已于 2026-08-20 抹除 → **这份校准数据永久丢失，Phase 10 做不了。**
+后果：加速度计能用，但轴向可能需要在上层手动纠正（自动旋转方向可能颠倒），
+且没有出厂 bias 补偿。⚠️ **给后人**：还留着 Windows 的机器，
+**先把那个 registry 目录拷出来再装系统。**
+
+#### 落地路线更新
+
+| 步骤 | 状态 |
+|---|---|
+| `hexagonrpcd`（打 `\r` 截断补丁后自编） | ✅ **已通**（apt 版不带补丁；注意要连 `libhexagonrpc.so` 一起装 + `ldconfig`） |
+| `libssc` + `ssccli` | ✅ **已通**（⚠️ 上游已删掉 `-Dmocking` 选项，照指南写会报 "Unknown option"） |
+| **加速度计读数** | ✅ **已通**，Z≈9.87 |
+| 光感读数 | ❌ 使能即污染会话，未解 |
+| 出厂校准 / 安装矩阵 | ❌ 随 Windows 永久丢失 |
+| **Android 侧 sensors HAL** | ⬜ 仍不存在 —— 这是把"自动旋转"真正交付给用户前唯一剩下的工程量 |
+
+⚠️ 另有两个环境坑（都会浪费大量时间）：
+* `droid-juicer` 会**无限 `openat("/usr/share/droid-juicer/configs")` 死循环**
+  （0.4.2 的 bug，`strace` 当场看到），把 apt 卡住 43 分钟。→ `systemctl mask`。
+* `initramfs-tools` 的 postinst 在本机**必然失败**
+  （`/etc/initramfs/post-update.d/systemd-boot` 返回 1，因为我们的 ESP 布局是自定义的）
+  → initramfs 的改动不会自动传播，别以为装完就生效了。

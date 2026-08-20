@@ -7,12 +7,34 @@
   它针对的是【Linux 侧】。本机的 Android 侧还缺一个 sensors HAL，
   见 #37 末尾的「落地路线」。
 
-  ⚠️ 在本机复现它有一个硬阻塞：Phase 4 / Phase 10 要从 Windows DriverStore
-  取文件，而本机的 Windows 已在 2026-08-20 抹除。
+  ══ 2026-08-20 本仓在真机上逐条复现的结果（详见 #37 的「实测结果」段）══
 
-  ✅ 已由本仓验证的部分：Phase 0 的前提之一 `/dev/fastrpc-sdsp` 原先不存在，
-  原因是 CONFIG_QCOM_FASTRPC=m 而这棵树不发模块；单独编 fastrpc.ko 后
-  insmod 即出现全部四个 fastrpc 节点。
+  ✅ 加速度计跑通了：静止时 Z≈9.87 m/s²，15 秒 131 行读数。
+     整条通路 fastrpc → hexagonfs → DSP 注册表 → SSC → QMI → libssc 全部验证。
+     一键复现脚本：scripts/slpi-sensors-setup.sh
+
+  ✅ Phase 0 的前提：/dev/fastrpc-sdsp 原先不存在，因为 CONFIG_QCOM_FASTRPC=m
+     而那棵树不发模块；insmod fastrpc.ko 后四个节点全出现。
+  ✅ Phase 4 原先的硬阻塞（要 Windows DriverStore）已解除 —— 全部文件可从
+     公开的 uup-drivers-sc8280xp release 提取，不需要 Windows 分区。
+     ★ cab 里的 qcslpi8280.mbn 与本仓在用的那份 sha256 逐字节相同。
+  ✅ Phase 3 的 socinfo 取值（QRD / 449 …）与内核 /sys/devices/soc0/soc_id
+     和 JSON 里的 soc_id 三方一致。
+
+  ⚠️ Phase 7 有出入：上游已删掉 -Dmocking 选项，照抄会报 "Unknown option"。
+     直接 meson setup build 即可。
+  ⚠️ Phase 8 之后需要【沉降时间】：重启后 6 秒就读实测是 0 行，等约 20 秒才有。
+     "读不到"不等于"坏了"。
+
+  ❌ Phase 9 的 light 在本机不成立：使能后从不返回读数，而且会污染整个 SSC
+     会话（之后连加速度计也读不到，必须重启 hexagonrpcd）。gyroscope 也测不了 ——
+     当前 ssccli 只支持 proximity/light/accelerometer/magnetometer/compass。
+  ❌ Phase 10 在本机【永久做不了】：出厂校准存在本机 Windows 的 DriverData 里，
+     不在任何驱动包中，而本机 Windows 已于 2026-08-20 抹除。
+     后果是安装矩阵全零（libssc 退回单位矩阵），轴向可能需上层纠正。
+     ★ 给还留着 Windows 的人：先把那个 registry 目录拷出来再装系统。
+  ❌ 顺带一条负面结果：不要用 hexagonrpcd 自带的 sscregistrygen 预生成注册表
+     —— 实测生成 142 个文件后加速度计一起坏掉，挪走即恢复。空 registry 才对。
 -->
 
 # Gaokun3 SLPI 传感器手动部署指南

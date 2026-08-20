@@ -41,7 +41,7 @@ Everything below was measured on hardware, not inferred. The evidence is in
 | **Gaming** | ✅ | Genshin Impact at max graphics, smooth. GPU idles at 270 MHz, peaks 690 MHz, 50 °C |
 | CPU thermal throttling | ✅ | Mainline DTS has **no** CPU cooling maps at all — fixed in [`patches/0009`](patches/) |
 | **Suspend / standby** | ❌ | s2idle **resumes into a reset**. Kernel/EC bug — reproduces identically under Ubuntu |
-| Sensors (accelerometer, ALS) | ❌ | Live on the SLPI DSP, unreachable from mainline. No auto-rotate, no auto-brightness |
+| Sensors (accelerometer, ALS) | ⚠️ | The accelerometer **is** readable on mainline — proven on this machine through the SLPI DSP (Z≈9.87 m/s² at rest). There is no Android HAL yet, so no auto-rotate *in Android* yet. The ALS is a different story: enabling it poisons the DSP session |
 | Hardware video decode | ❌ | Venus not enabled; 66 software codecs only |
 | Camera | ❌ | Not started |
 | USB-C DisplayPort / UCSI | ❌ | UCSI PPM init times out — a known mainline defect on this machine |
@@ -163,7 +163,7 @@ conclusions were later overturned. Several of them were.
 | Issue | Where |
 |---|---|
 | s2idle resume fails; the machine resets | [`docs/stage6-crdroid.md`](docs/stage6-crdroid.md) §M4 |
-| Sensors are behind the SLPI DSP (#37) | [`docs/stage4-findings.md`](docs/stage4-findings.md) |
+| Sensors: the accelerometer reads correctly on Linux, but there is no Android HAL yet; enabling the ALS breaks the DSP session (#37) | [`docs/stage4-findings.md`](docs/stage4-findings.md) |
 | USB re-enumeration drops adb after unplug — use adb over TCP (#27) | [`docs/stage4-findings.md`](docs/stage4-findings.md) |
 | GPU SMMU raises SPI 675/680 while the DT declares 678/679 | [`docs/stage5-freedreno.md`](docs/stage5-freedreno.md) D6 |
 | The thermal HAL is the AOSP mock, and its SHUTDOWN threshold is 36 °C | [`docs/stage6-crdroid.md`](docs/stage6-crdroid.md) §M4 |
@@ -187,9 +187,14 @@ Concrete, well-scoped work, roughly easiest first:
 5. **s2idle resume.** Needs a kernel with `CONFIG_PM_DEBUG` to bisect —
    `/sys/power/pm_test` does not exist in the shipped config. Probably upstream
    kernel/EC work.
-6. **Sensors.** Would require a mainline client for Qualcomm's SEE running on
-   the SLPI, over QMI/FastRPC. Nobody has done this for any SC8280XP device,
-   the ThinkPad X13s included.
+6. **Sensors — the hard half is already done.** The accelerometer now reads
+   correctly on this machine through the SLPI DSP, using `hexagonrpcd` and
+   `libssc` ([`scripts/slpi-sensors-setup.sh`](scripts/slpi-sensors-setup.sh)
+   reproduces it end to end). As far as we know no other SC8280XP device has
+   this working, the ThinkPad X13s included. What is missing is the **Android**
+   side: port `hexagonrpcd` (plain C — fastrpc ioctl plus a small read-only
+   VFS) and write an AIDL `android.hardware.sensors` HAL around libssc. That
+   one piece of work is what stands between this port and auto-rotate.
 7. **Camera.** Untouched.
 
 If you have a MateBook E Go and want to test, open an issue — reports of what

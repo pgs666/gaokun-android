@@ -36,7 +36,7 @@ recovery 分区，也没有串口。这不是一次常规移植 —— 它是 **
 | **游戏** | ✅ | 原神画质极高流畅。GPU 空闲 270 MHz、峰值 690 MHz、最高 50 °C |
 | CPU 温控降频 | ✅ | 主线 DTS **根本没有** CPU 的 cooling map —— 已由 [`patches/0009`](patches/) 在设备树里根治 |
 | **待机 / 挂起** | ❌ | s2idle **挂得下去、醒不回来**，随后整机复位。内核/EC 缺陷 —— Ubuntu 下同样复现 |
-| 传感器（加速度计、光感） | ❌ | 挂在 SLPI DSP 后面，主线够不着。**没有自动旋转、没有自动亮度** |
+| 传感器（加速度计、光感） | ⚠️ | 加速度计在主线上**确实能读**—— 已在本机经 SLPI DSP 实测通过（静止时 Z≈9.87 m/s²）。但 Android 侧还没有 HAL，**所以 Android 里暂时仍无自动旋转**。光感是另一回事：一使能就会污染整个 DSP 会话 |
 | 硬件视频解码 | ❌ | Venus 未启用；66 个编解码器全是软解 |
 | 摄像头 | ❌ | 没开始 |
 | USB-C 外接显示 / UCSI | ❌ | UCSI PPM 初始化超时，本机主线的已知缺陷 |
@@ -149,7 +149,7 @@ Android 相关的配置断言在
 | 问题 | 位置 |
 |---|---|
 | s2idle 醒不回来，整机复位 | [`docs/stage6-crdroid.md`](docs/stage6-crdroid.md) §M4 |
-| 传感器挂在 SLPI DSP 后面（#37） | [`docs/stage4-findings.md`](docs/stage4-findings.md) |
+| 传感器：Linux 侧加速度计已能正确读数，但 Android 侧尚无 HAL；使能光感会弄坏 DSP 会话（#37） | [`docs/stage4-findings.md`](docs/stage4-findings.md) |
 | 拔插 USB 后 adb 不重枚举，用 adb over TCP 兜底（#27） | [`docs/stage4-findings.md`](docs/stage4-findings.md) |
 | GPU SMMU 拉的是 SPI 675/680，而 DT 声明 678/679 | [`docs/stage5-freedreno.md`](docs/stage5-freedreno.md) D6 |
 | 热管理 HAL 是 AOSP mock，它的 SHUTDOWN 阈值只有 36 °C | [`docs/stage6-crdroid.md`](docs/stage6-crdroid.md) §M4 |
@@ -171,8 +171,13 @@ Android 相关的配置断言在
 4. **SELinux 转 enforcing。** 有两个服务需要写策略。
 5. **s2idle 的 resume。** 要先编一个带 `CONFIG_PM_DEBUG` 的内核才能二分
    （现在的配置里没有 `/sys/power/pm_test`）。多半是上游内核/EC 的活。
-6. **传感器。** 需要给 SLPI 上跑的高通 SEE 写一个主线客户端，走 QMI/FastRPC。
-   **任何 SC8280XP 设备都没人做到过**，ThinkPad X13s 也没有。
+6. **传感器 —— 难的那一半已经做完了。** 加速度计现在能在本机经 SLPI DSP
+   正确读数（`hexagonrpcd` + `libssc`，
+   [`scripts/slpi-sensors-setup.sh`](scripts/slpi-sensors-setup.sh) 能一键复现）。
+   据我们所知，**其他 SC8280XP 设备都没有跑通过这一套**，ThinkPad X13s 也没有。
+   缺的是 **Android 侧**：把 `hexagonrpcd` 移过去（纯 C，fastrpc ioctl
+   加一个小的只读 VFS），再拿 libssc 包一个 AIDL
+   `android.hardware.sensors` HAL。**就靠这一块活，自动旋转就能落地。**
 7. **摄像头。** 完全没碰。
 
 如果你手上有 MateBook E Go 想帮忙测，欢迎开 issue —— **报告哪里坏了和交补丁
