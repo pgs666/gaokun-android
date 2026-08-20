@@ -5,7 +5,7 @@
 在华为 MateBook E Go（Snapdragon 8cx Gen 3 / sc8280xp，代号 gaokun）上跑原生 AOSP，
 最终目标是能稳定运行 arm64 手游。
 
-**当前阶段：Stage 6 M5 完成 — ★修复已固化进镜像；原神/明日方舟可玩；Windows 已抹除，/data 370G，救援系统全内置**（每次开工时更新这一行）
+**当前阶段：Stage 6 M6 完成 — ★★已公开发版 v0.1.0-alpha；Virtual A/B + 自研 boot_control HAL 实机跑通；安装器脚本已入库**（每次开工时更新这一行）
 
 > **★★ Stage 6 M5（2026-08-20）：M4 的成果全部固化进镜像 + 传感器判死。**
 >
@@ -46,6 +46,67 @@
 > → **自动旋转、自动亮度在主线上做不了**（要有人写 SEE 的 QMI/FastRPC 客户端，
 > 至今没有任何 sc8280xp 设备做到，X13s 也没有）。★**游戏不受影响。**
 > 工具 `scripts/probe-windows-sensors.sh`，完整证据 `docs/stage4-findings.md` #37。
+>
+> **★★ Stage 6 M6（2026-08-20）：公开发版 + A/B OTA 打通。**
+>
+> **仓库已公开**：https://github.com/vahiru/gaokun-android （Apache-2.0）。
+> Release **v0.1.0-alpha** 含全新安装产物（`super.img.zst` / `Image` / dtb /
+> `ramdisk.img` + sha256 清单）与 A/B 更新包
+> （`crDroidAndroid-16.0-20260820-gaokun3-v12.11.zip`）+ `gaokun3.json`。
+> - 公开前**改写了历史**（用户选的）：`git filter-branch` 抹掉构建机静态公网 IP
+>   与家里 WiFi 的 SSID，77 个提交全改。**验证要点：`--all` 会把
+>   `refs/original/*` 和 `refs/remotes/origin/*` 算进去，那会让你以为没抹干净**
+>   —— 只验要推的 `main`（`git log main -S` + 遍历 `rev-list --objects main`
+>   的全 blob 扫描，两法都是 0 才算过）。
+>   ⚠️ 强推后 GitHub 仍保留旧对象（按 SHA 可取，但 SHA 从未公开过，风险≈0）；
+>   要硬保证就删库重建（我们有 verified bundle）。**真正的补救是把 NSG 的 22
+>   端口锁到自己的出口 IP** —— 那个 IP 是静态的，deallocate 也不释放。
+> - 历史审计结论：**固件 blob 与密钥从未进过历史** ✅。
+>
+> ★**A/B 走的是 Virtual A/B，分区布局一个字节没改** —— 每槽镜像合计 2.53 GiB，
+> 12 GiB 的 super 连传统 A/B 都放得下，而 Virtual A/B 连扩都不用扩。
+> 只新增了 4 MiB 的 `misc`（本机用的是盘头 GPT 之后闲置的 1007 KiB，
+> 扇区 34–2047，没动那个 64 GiB 备份）。
+> 内核前提：`CONFIG_DM_SNAPSHOT=y` ✅，`CONFIG_DM_USER` 无 → 只能非压缩快照，
+> 故只 inherit `virtual_ab_ota/launch.mk`。
+>
+> ★**自研 boot_control HAL**（`device/huawei/gaokun3/boot_control/`）。
+> 标准 `boot-service.default` 把槽位写进 misc 就指望 bootloader 去读，
+> 而 systemd-boot 不认识那个结构。我们这个原样复用 `libboot_control`
+> （misc 仍是唯一真相源，`bootctl`/update_engine 行为不变），额外把槽位
+> 镜像进 ESP 的 `loader.conf`（写 glob `default *-android-a.conf`，
+> 于是不必知道 machine-id）。
+> **实机验证**：`bootctl get-number-slots`=2、当前槽 `_a`、
+> slot0 bootable+successful、HAL 日志 `systemd-boot default now: ...`、
+> `vold`/`update_engine` 都报 `Using AIDL version of IBootControl`。
+>
+> ⚠️**M6 踩的两个坑，都是"看着完全无关"的那种**：
+> 1. ★**fstab 的 logical 行必须带 `slotselect`**。少了它 fs_mgr 去找字面叫
+>    `system` 的逻辑分区，而 A/B 的 super 里只有 `system_a`/`system_b`
+>    → first-stage mount 失败 → **init 主动 `reboot()` 而非 panic**
+>    → pstore 全空、屏幕一闪而过，**唯一症状是"进 A 槽就重启"**。
+>    我第一反应是"ramdisk 没跟着换"，换了照样重启（猜错一次）。
+>    判据：`device/linaro/dragonboard/fstab.common` 是树内现成的 A/B 设备，
+>    每条 logical 行都带 `slotselect`，逐字对照即得。
+> 2. ★**`nb_slot` 会是 4 而不是 2**。`InitDefaultBootloaderControl()` 靠
+>    `stat()` 探测 `<miscdir>/boot_a..boot_d` 数槽位，本机**没有 boot 分区**
+>    （内核/ramdisk 是 ESP 上的文件），探不到就按设计回退成 `kMaxNumSlots=4`。
+>    后果很阴：`(cur+1)%4` 让**第二次** OTA 从 `_b` 切到不存在的 `_c`，
+>    故障晚一个版本才爆。修法：HAL 的 `main()` 里把两个探测路径 symlink 到
+>    `/dev/null`（`stat` 跟随符号链接会成功，正好数出 2；boot 不在
+>    `AB_OTA_PARTITIONS` 里，没人读写它们）。
+>
+> ⚠️**`otapackage` target "不存在"是假象**：`build/make/core/Makefile:5793-5806`
+> 在 `TARGET_NO_KERNEL=true` 且无 boot 镜像、以及无 recovery.fstab 时把
+> `build_ota_package` 关掉。加 `PRODUCT_BUILD_GENERIC_OTA_PACKAGE := true`
+> 一次跳过全部三条（AOSP 注释明说就是给树外内核用的）。
+> crDroid 的打包 target 叫 **`bacon`**，它顺带跑 `createjson.sh` 生成
+> Updater 要的 `gaokun3.json`。
+>
+> **安装器**：`scripts/install-gaokun3.sh` —— 从任意 arm64 Linux live 环境
+> 一条命令装好（分区 + super + systemd-boot + 救援系统 + 两个槽位条目）。
+> 默认启动项给**救援系统**而不是 Android：默认落点必须是能远程接入的系统。
+> LiveCD 尚未打包，但这个脚本就是它的内核。
 >
 > ★★**Windows 已抹除，整机归 Android；U 盘不再是必需品**（2026-08-20，用户授权
 > "数据都备份了，直接不要"）。
