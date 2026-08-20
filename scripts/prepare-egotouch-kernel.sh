@@ -42,6 +42,15 @@ fetch_ack_file drivers/staging/android/uapi/ashmem.h
 fetch_ack_file drivers/staging/android/Kconfig
 fetch_ack_file drivers/staging/android/Makefile
 
+# Linux 7.2 made vm_area_struct flags type-safe.  The ACK source still uses
+# the legacy vm_flags view at this call site; pass the native flags value.
+sed -i 's/shmem_file_setup(name, asma->size, vma->vm_flags)/shmem_file_setup(name, asma->size, vma->flags)/' \
+    "$KERNEL_DIR/drivers/staging/android/ashmem.c"
+# inode numbers are u64 on this kernel, including arm64 where unsigned long
+# and u64 are distinct GCC format types.
+sed -i 's/seq_printf(m, "inode:\\t%ld\\n", file_inode(asma->file)->i_ino);/seq_printf(m, "inode:\\t%llu\\n", (unsigned long long)file_inode(asma->file)->i_ino);/' \
+    "$KERNEL_DIR/drivers/staging/android/ashmem.c"
+
 if ! grep -qF 'source "drivers/staging/android/Kconfig"' "$KERNEL_DIR/drivers/staging/Kconfig"; then
     sed -i '/^endif # STAGING/i source "drivers/staging/android/Kconfig"\n' \
         "$KERNEL_DIR/drivers/staging/Kconfig"
