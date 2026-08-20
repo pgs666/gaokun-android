@@ -1,0 +1,108 @@
+name: Build gaokun3 kernel with EGoTouchRev touch driver
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_tag:
+        description: 'Linux kernel tag to build'
+        required: true
+        default: 'v7.2-rc2'
+      localversion:
+        description: 'Kernel LOCALVERSION suffix'
+        required: true
+        default: '-gaokun3'
+
+jobs:
+  build-kernel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git make gcc bison flex bc libssl-dev libelf-dev dwarves ccache curl \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+
+      - name: Checkout gaokun-android
+        uses: actions/checkout@v4
+        with:
+          path: gaokun-android
+
+      - name: Clone EGoTouchRev-Linux
+        run: |
+          git clone --depth=1 https://github.com/chiyuki0325/EGoTouchRev-Linux.git EGoTouchRev-Linux
+
+      - name: Clone linux-gaokun-buildbot
+        run: |
+          git clone --depth=1 https://github.com/KawaiiHachimi/linux-gaokun-buildbot.git linux-gaokun-buildbot
+
+      - name: Clone Linux kernel
+        run: |
+          git clone --depth=1 \
+            https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git \
+            linux -b ${{ github.event.inputs.kernel_tag }}
+
+      - name: Configure git identity
+        run: |
+          git -C linux config user.name "CI"
+          git -C linux config user.email "ci@localhost"
+
+      - name: Apply gaokun3 patches
+        working-directory: linux
+        run: |
+          git am ../linux-gaokun-buildbot/patches/upstream/*.patch
+          git am ../linux-gaokun-buildbot/patches/others/*.patch
+          git am ../linux-gaokun-buildbot/patches/media/*.patch
+          git am ../linux-gaokun-buildbot/patches/0099-arm64-gaokun3-import-local-dts-and-defconfig.patch
+
+      - name: Replace Himax driver with EGoTouchRev-Linux
+        run: |
+          cp EGoTouchRev-Linux/touchscreen-hx83121a-dkms/himax-spi-core.c linux/drivers/input/touchscreen/
+          cp EGoTouchRev-Linux/touchscreen-hx83121a-dkms/hx-algo.c        linux/drivers/input/touchscreen/
+          cp EGoTouchRev-Linux/touchscreen-hx83121a-dkms/hx-algo.h        linux/drivers/input/touchscreen/
+          cp EGoTouchRev-Linux/touchscreen-hx83121a-dkms/hx-frame-status.h linux/drivers/input/touchscreen/
+
+      - name: Set up ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-gaokun3-${{ github.event.inputs.kernel_tag }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-gaokun3-${{ github.event.inputs.kernel_tag }}-
+            ccache-gaokun3-
+
+      - name: Build kernel
+        working-directory: linux
+        run: |
+          export CCACHE_DIR="$HOME/.ccache"
+          export CC="ccache aarch64-linux-gnu-gcc"
+          export CROSS_COMPILE="aarch64-linux-gnu-"
+          export CXX="ccache aarch64-linux-gnu-g++"
+          mkdir -p ../kernel-out
+          make O=../kernel-out ARCH=arm64 gaokun3_defconfig
+          bash ../gaokun-android/scripts/kernel-config-android.sh ../kernel-out
+          scripts/config --file ../kernel-out/.config --enable EFI_ZBOOT
+          make O=../kernel-out ARCH=arm64 olddefconfig
+          make O=../kernel-out ARCH=arm64 -j"$(nproc)"
+
+      - name: Verify Himax driver is built-in
+        run: |
+          grep '^CONFIG_TOUCHSCREEN_HIMAX_HX83121A_SPI=' kernel-out/.config
+          test "$(grep '^CONFIG_TOUCHSCREEN_HIMAX_HX83121A_SPI=' kernel-out/.config)" = "CONFIG_TOUCHSCREEN_HIMAX_HX83121A_SPI=y"
+
+      - name: Print artifact info
+        run: |
+          ls -lh kernel-out/arch/arm64/boot/Image
+          ls -lh kernel-out/arch/arm64/boot/vmlinuz.efi
+          ls -lh kernel-out/arch/arm64/boot/dts/qcom/sc8280xp-huawei-gaokun3.dtb
+
+      - name: Upload kernel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gaokun3-egotouch-kernel
+          path: |
+            kernel-out/arch/arm64/boot/Image
+            kernel-out/arch/arm64/boot/vmlinuz.efi
+            kernel-out/arch/arm64/boot/dts/qcom/sc8280xp-huawei-gaokun3.dtb
+            kernel-out/.config
