@@ -28,17 +28,24 @@
 #   --stage-only  产物传到 staging/<ver>/ 而【不更新】ota/gaokun3.json。
 #                 用来在自己机器上验一版而不惊动任何用户 —— 发布是对外动作，
 #                 应该是显式的一步。
+#   --no-build    跳过构建，直接用 out/ 里现成的产物。
+#                 ★ 这个选项是必需的，不是方便：build stamp 每次构建都会变，
+#                 所以"重跑一次构建再发版"发出去的**不是**你在硬件上验过的那一版。
+#                 流程应该是：构建一次 → 装到机器上验 → 用 --no-build 发那一版。
+#                 （2026-08-21 亲自踩过：我在设备上验了 1787246871，
+#                   然后跑 release.sh 又构建了一次，staging 里成了 1787247612。）
 
 set -euo pipefail
 
 BUCKET=${BUCKET:-gaokun-android}
 HOST=${HOST:-https://ota.072172.xyz}
 UPLOAD=${UPLOAD:-$HOME/r2-upload.py}
-DRY=0; STAGE_ONLY=0
+DRY=0; STAGE_ONLY=0; NO_BUILD=0
 for a in "$@"; do
     case "$a" in
         --dry-run)    DRY=1 ;;
         --stage-only) STAGE_ONLY=1 ;;
+        --no-build)   NO_BUILD=1 ;;
         *) echo "未知参数: $a" >&2; exit 2 ;;
     esac
 done
@@ -50,8 +57,12 @@ ok()  { echo "✓ $*"; }
 cd "$ANDROID_BUILD_TOP"
 OUT=${OUT:-$ANDROID_BUILD_TOP/out/target/product/gaokun3}
 
-echo "═══ 1. 一次构建（bacon 与 superimage 必须同一次调用）═══"
-m -j"$(nproc)" bacon superimage
+if [ "$NO_BUILD" = 1 ]; then
+    echo "═══ 1. --no-build：用 out/ 里现成的产物（发的就是验过的那一版）═══"
+else
+    echo "═══ 1. 一次构建（bacon 与 superimage 必须同一次调用）═══"
+    m -j"$(nproc)" bacon superimage
+fi
 
 echo "═══ 2. 断言 ═══"
 ZIP=$(ls -t "$OUT"/crDroidAndroid-*.zip 2>/dev/null | head -1)

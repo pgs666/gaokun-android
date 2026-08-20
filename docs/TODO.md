@@ -108,6 +108,18 @@
 `PPM init failed -ETIMEDOUT`，本机主线已知缺陷，`/sys/class/typec/` 是空的。
 代价还包括 USB 只有 high-speed（SuperSpeed 需要 UCSI 切 orientation）。
 
+### A8. ★WiFi 大流量下塌到 10 KB/s（`ath11k` 的 `msdu_done` 丢帧）
+详见 [#44](stage4-findings.md)。链路指标完美（RSSI −35、11ax、2401 Mbps）
+但 **45% 丢包**，dmesg 刷 `msdu_done bit in attention is not set`。
+**负载触发**：25 次全部落在下载那几分钟，开机到下载开始前一条都没有。
+**对"用户自己走系统内 OTA 升级"有实际影响。**
+
+⚠️ 一条诚实的相关性：出问题那次跑在内核 #19（含 Venus 补丁），顺利那次是 #18。
+**没有证据**说 Venus 导致了它，别当成结论。
+
+**第一步**：在 #18 上做同样的大下载，看能否复现 —— 这一步就能证否或证实
+那个相关性，而且不需要任何新工具。
+
 ### A7. 摄像头
 完全没碰。
 

@@ -33,7 +33,7 @@ Everything below was measured on hardware, not inferred. The evidence is in
 | GPU — Adreno 690, hardware Vulkan | ✅ | Mesa 26.0.3 `turnip`; zero SMMU faults over a 22-minute soak |
 | Touchscreen | ✅ | Himax HX83121A; needs the gpio174 patch in `patches/` |
 | Detachable keyboard + touchpad | ✅ | USB HID `12d1:10b8` |
-| Wi-Fi | ✅ | ath11k / WCN6855 |
+| Wi-Fi | ⚠️ | Works — ath11k / WCN6855. **But sustained large downloads can collapse to ~10 KB/s** with 45% packet loss while the link itself reports RSSI −35 dBm and 2401 Mbps: the driver logs `msdu_done bit in attention is not set` and drops those frames. Load-triggered, not always present. It affects in-system OTA downloads. [#44](docs/stage4-findings.md) |
 | Bluetooth | ⚠️ | Works — `hci_qca`, adapter `ON`, zero crashes at boot. **But it can deadlock after long uptime**, together with audio; see [#38](docs/stage4-findings.md) |
 | Speakers | ⚠️ | Works — user-confirmed, WSA883x via audioreach. **But audio can deadlock after long uptime**, together with Bluetooth; see [#38](docs/stage4-findings.md) |
 | Headphone jack | ⚠️ | **Fixed, awaiting a user with headphones.** Three separate blockers, none of them exotic: the RX macro's interpolator stage was never wired up (input mux and demodulator mux both at reset values), so the DAPM route was incomplete and the backend refused to open — with no kernel message at all. Then the audio policy declared no wired output, and `WiredAccessoryManager` was watching `/sys/class/switch/h2w`, which does not exist on mainline. Measured after the fix: PCM 0 `RUNNING`, DMA consuming 48960 frames/s. [#40](docs/stage4-findings.md) |
