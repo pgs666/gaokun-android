@@ -991,6 +991,111 @@ sound/soc/codecs/wcd938x.c:192
   不必像早期脚本那样用控件编号。用名字更好 —— **编号会随内核/拓扑变化而漂移**。
 
 
+### ★★ 阻塞点 4 与 5（用户实测"插上还是没有声音"之后才找到，2026-08-21）
+
+上面三点做完、混音器通路实测跑满 48 kHz 之后，用户插上耳机**仍然没有声音**。
+耳机当时还插着，所以能在线逐层定位。**框架侧从头到尾都是对的**：
+
+```
+dumpsys input          SwitchValues: 0x94   = HEADPHONE|MICROPHONE|JACK_PHYSICAL
+InputManager           mUseDevInputEventForAudioJack=true
+WiredAccessoryManager  MSG_NEW_DEVICE_STATE
+AudioDeviceInventory   setWiredDeviceConnectionState( type:4 (sink) … addr: name:h2w)
+                       APM failed to make available device 0x4addr= error=1   ← 卡住
+```
+
+⚠️ 顺带确认一件事免得下次白费功夫：`sendevent` 注入 `EV_SW` **是有效的**
+（并行 `getevent -lt` 抓到了完整的拔/插序列），所以可以在**没有人在机器边**的
+情况下复现插拔。这是本轮能定位的关键前提。
+
+#### 阻塞点 4：可插拔设备端口**不能写 `address`**
+
+`AUDIO_DEVICE_OUT_WIRED_HEADSET` 的连接请求里**地址永远是空串**
+（日志里那个 `addr:` 后面什么都没有），而
+`HwModuleCollection::getDeviceDescriptor()`（`HwModule.cpp`）里有这道守卫：
+
+```cpp
+// Prevent overwriting moduleDevice address if connected device does not have the same
+// address (since getDevice with empty address ignores match on address), use dynamic device
+if (moduleDevice && allowToCreate &&
+        (!moduleDevice->address().empty() &&
+         (moduleDevice->address().compare(devAddress.c_str()) != 0))) {
+    break;
+}
+```
+
+连接请求的 `allowToCreate` 是 true，于是"声明的地址非空、请求的地址为空"就
+`break` 出去改造一个**动态设备** —— 那个动态设备没有任何 profile/route，连接失败。
+
+★ **规律：attached 的设备可以写 address（Speaker / Built-In Mic），
+removable 的绝对不能写。** 不写之后 HAL 靠回落值决定 ALSA 设备，而这个回落
+恰好就是我们要的：
+
+```
+StreamPrimary.h:61   kDefaultCardAndDeviceId{PrimaryMixer::kAlsaCard, PrimaryMixer::kAlsaDevice}
+PrimaryMixer.h:27-28 kAlsaCard = 0, kAlsaDevice = 0        → hw:0,0
+```
+
+hw:0,0 正是 `RX_CODEC_DMA_RX_0`（MultiMedia1）耳机后端。运气好。
+
+#### ★ 阻塞点 5（真凶）：AOSP 的 AIDL 默认音频 HAL **压根不接受可插拔设备**
+
+去掉 address 之后失败点往前走了一步，这次 HAL 自己说了原因：
+
+```
+AHAL_Module: connectExternalDevice: device port 4 device set to
+    AudioDevice{type: AudioDeviceDescription{type: OUT_HEADSET, connection: analog},
+                address: AudioDeviceAddress{id: }}
+AHAL_Module: populateConnectedDevicePort: module implementation must override
+    'populateConnectedDevicePort' to handle connection of external devices.
+AHAL_Module: Function: connectExternalDevice Line: 768 Failed
+```
+
+`Module::populateConnectedDevicePort()` 是一条**纯错误路径**。
+`ModuleAlsa` / `ModuleUsb` / `ModuleBluetooth` / `ModuleRemoteSubmix` 全都
+override 了它 —— **只有 `ModulePrimary` 没有**
+（`class ModulePrimary final : public Module`）。
+所以原装 primary 模块**无法接受任何 removable 设备**，插模拟耳机必失败。
+
+★ 讽刺的是 `Module::connectExternalDevice()` 自己的注释就描述了我们这个情形：
+
+> 2. If the template device port has dynamic profiles, while all routable mix ports
+>    have static profiles, [...] the connected device port can be left with dynamic
+>    profiles [...] **An example of this case is connection of an analog wired headset,
+>    it should be treated in the same way as a speaker.**
+
+而它只在"连接后端口仍只有动态 profile **且**可路由 mix port 也只有动态 profile"
+时才拒绝。我们两边都是静态 profile，所以什么都不用 populate ——
+`patches/0010` 就是一个"接受并返回 ok"的 override。
+
+**修好之后实测**：
+
+```
+AHAL_ModulePrimary: populateConnectedDevicePort: accepting AudioPort{id: 4, name: Wired Headset, …}
+AHAL_Module: connectExternalDevice: template port 4 external device connected, connected port ID 26
+dumpsys audio:  Devices: headset(4)          ← 不再是 speaker(2)
+APM Connected device: 0x4
+```
+
+#### ⚠️ 耳机麦（`IN_WIRED_HEADSET`）本轮刻意**不声明**
+
+硬件是好的（hw:0,2 实测录到 384000 帧）。但声明它现在会**弄坏录音**：
+可插拔端口不能带 address，而不带 address 时 HAL 回落到 hw:0,0，
+那是个**只有播放**的设备（`/dev/snd` 里只有 `pcmC0D0p`，没有 `pcmC0D0c`）
+→ 打开必失败。于是插着耳机时录音会从"能用的内置麦"退化成"什么都录不到"。
+不声明则一直用内置麦，严格优于现状。
+**正解**是给 `StreamPrimary::getCardAndDeviceId()` 加一张"按设备类型回落"的表
+（它现在只会回落到 `kDefaultCardAndDeviceId`，不看设备类型）。
+
+#### 验到哪一步为止（不要夸大）
+
+已验证：框架切到 `headset(4)`、HAL 接受连接、混音器通路实测 PCM0 实时跑满
+48 kHz、四条通路开机即用、无回归。
+**未验证：听感。** 无头触发框架音频这条路试了音量键提示音与
+`cmd notification post`（后者的 shell 通道 `sound=null`），
+`AudioFlinger` 的 `Total writes` 始终是 0 —— 这个 ROM 里很难无头起 AudioTrack。
+★ 好消息是设备上装着**网易云音乐**与 **LineageOS 录音机**，用户可以直接验听与验麦。
+
 ### ★ 顺带查出：内置麦克风一直是**完全断的**，而且谁都没发现（2026-08-21）
 
 修完耳机之后顺手把两条采集通路也测了 —— 结果内置麦压根打不开：
