@@ -343,19 +343,26 @@ PRODUCT_COPY_FILES += \
 # 所以是 overlay/packages/apps/Updater/app/src/main/res/…
 DEVICE_PACKAGE_OVERLAYS += device/huawei/gaokun3/overlay
 
-# ★ 用户态 CPU 温控 —— 补主线 DTS 的缺口（2026-08-20 M4 实测发现）。
-# 主线 sc8280xp.dtsi 里总共只有一个 cooling-maps，就在 gpu-thermal 下面；
-# cpu0..cpu7-thermal / cluster0-thermal 只有一条 110C 的 critical trip，
-# 既无 passive trip 也没绑任何 cooling device →
-# CPU 会一路满频到 110C 然后被内核紧急关机，中间没有渐进降频。
-# 这台是被动散热无风扇平板，长时间游戏会真的撞上。
-# 根治要改 DTS（给 CPU zone 加 passive trip + cooling-maps，可只重编 DTB）；
-# 在那之前用这个脚本接管 cpufreq-cpu0/cpu4 两个 cooling device。
-# 完整机制与实测数据见 bin/thermal-guard.sh 的注释。
-PRODUCT_COPY_FILES += \
-    $(LOCAL_PATH)/bin/thermal-guard.sh:$(TARGET_COPY_OUT_VENDOR)/bin/thermal-guard.sh \
-    $(LOCAL_PATH)/etc/thermalguard.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/thermalguard.rc
-
+# ★ 用户态 CPU 温控已退役（M6，2026-08-20）——改由 patches/0009 在 DTS 里根治。
+#
+# 原先这里装 bin/thermal-guard.sh + etc/thermalguard.rc，因为主线
+# sc8280xp.dtsi 里总共只有一个 cooling-maps（在 gpu-thermal 下），
+# 8 个 cpuN-thermal 只有一条 110C 的 critical trip、没有任何 cooling device
+# —— CPU 会一路满频跑到内核紧急关机，中间没有渐进降频。
+#
+# patches/0009-arm64-dts-sc8280xp-add-cpu-cooling-maps.patch 给这 8 个温区
+# 各加了一条 85C 的 passive trip 并绑到本簇的 cpufreq cooling device。
+# 实机验证（同一台机器，换 DTB 前后对比）：
+#     改前  cdev=0 trip=1
+#     改后  cdev=1 trip=2   trip0=85000/passive  trip1=110000/critical
+#           cpu0-thermal -> cpufreq-cpu0     cpu4-thermal -> cpufreq-cpu4
+#
+# ★ 为什么必须【撤掉】用户态那个，而不是"留着当双保险"：
+#   温区一旦绑定 cooling device，cur_state 就归内核 thermal core 管
+#   （step_wise 会持续写它）。用户态再去写同一个节点就是两个调节器互相打架,
+#   互相覆盖对方的决定。脚本本身留在仓库里（带失效说明），给还在用旧 DTB
+#   的人用。
+#
 # turnip 调试旗标加载器（快速迭代机制，见 docs/stage5-freedreno.md）
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/bin/tu_debug_loader.sh:$(TARGET_COPY_OUT_VENDOR)/bin/tu_debug_loader.sh

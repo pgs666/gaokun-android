@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Framework resource overlay for gaokun3.
+  Fed to Soong by DEVICE_PACKAGE_OVERLAYS in device.mk; the path mirrors the
+  framework-res module's own resource directory.
+-->
+<resources>
+
+    <!--
+      Render at 120 Hz instead of 60.
+
+      The panel has two modes and the *hardware* one already in use is 120 Hz
+      (SurfaceFlinger: activeMode vsyncRate=120.00 Hz, vsync period 8.33 ms).
+      What pinned the render rate to 60 was this framework default:
+      frameworks/base/core/res/res/values/config.xml:5870 ships
+      config_defaultRefreshRate = 60, and the scheduler duly configured itself
+      for 60 Hz work (app duration 16666682 ns, SF duration 15666682 ns).
+
+      ⚠️ Settings.System.peak_refresh_rate does NOT fix this — measured: setting
+      it to 120 left the scheduler durations at 16.67 ms. The base/default rate
+      is what governs, not the peak.
+
+      Pinning rather than using config_defaultPeakRefreshRate=120 with
+      config_defaultRefreshRate=0: the 60 Hz and 120 Hz modes sit in *different*
+      mode groups (group=2 and group=1), so moving between them is a full
+      non-seamless modeset rather than a seamless switch. Pinning the mode the
+      panel is already in avoids that entirely.
+
+      Cost is power: 120 Hz composites twice as often. Acceptable here because
+      the GPU is nowhere near loaded — under Genshin at maximum settings it
+      spends 91% of its time at its *lowest* 270 MHz step and peaks at 690 MHz.
+      To go back to 60, set this to 60 and rebuild.
+    -->
+    <integer name="config_defaultRefreshRate">120</integer>
+
+</resources>

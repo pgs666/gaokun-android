@@ -1,4 +1,16 @@
 #!/vendor/bin/sh
+#
+# ⚠️ 已退役（2026-08-20，M6）。本文件【不再随镜像安装】。
+#
+# 它存在的理由是主线 sc8280xp.dtsi 的 CPU 温区没有任何 cooling device。
+# 那个缺口现在由 patches/0009-arm64-dts-sc8280xp-add-cpu-cooling-maps.patch
+# 在 DTS 里根治了：8 个 cpuN-thermal 各加一条 85C passive trip 并绑到本簇的
+# cpufreq cooling device（实机验证 cdev 0->1、trip 1->2）。
+#
+# ★ 不要在已打 0009 的 DTB 上再跑这个脚本：温区绑定之后 cur_state 归内核
+#   thermal core 管，用户态再写同一个节点会与 step_wise 互相覆盖。
+#   文件留在这里只为还在用旧 DTB 的人。
+#
 # 用户态 CPU 温控 —— 补主线 sc8280xp.dtsi 的缺口。
 #
 # ★为什么需要它（2026-08-20 M4 实测，用户在跑原神时发现）：
