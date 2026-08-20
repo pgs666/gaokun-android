@@ -30,7 +30,8 @@ OUT="${1:?用法: $0 <kernel-out-dir>}"
     --enable USB_CONFIGFS_F_FS --enable USB_CONFIGFS_ACM \
     --enable USB_CONFIGFS_MASS_STORAGE --enable USB_CONFIGFS_ECM \
     --enable USB_CONFIGFS_RNDIS --enable USB_CONFIGFS_EEM \
-    --enable OVERLAY_FS \
+    --enable OVERLAY_FS
+
 # ★ Android 的挂起框架依赖 /sys/power/wake_lock（CONFIG_PM_WAKELOCKS）。
 #   缺了它 SystemSuspend 退化到 wakeup_count 模式，而本机 s2idle 恢复是坏的
 #   （EC 挂起坑，Stage 3 起的已知问题），表现为：闲置 45–60 秒后
@@ -40,12 +41,24 @@ OUT="${1:?用法: $0 <kernel-out-dir>}"
 #   还一度被误判成"system_server 崩溃导致重启"。
 #   有了 wake_lock 接口，init 就能在 early-init 无条件持锁挡住自动挂起
 #   （见 device/huawei/gaokun3/init.gaokun3.rc），且与是否插电无关。
+#
+# ★ cgroup v1：6.12+ 拆分后默认关。Android 的 cgroups.json 要求 cpuset 走 v1，
+#   缺了会 SetupCgroups 失败 -> bootstrap-apexd-failed 复位（findings 第 8 节）。
+#
+# ⚠️★ 2026-08-20 修掉的一个静默失效：下面这 5 项原先写在上面那条
+#   ./scripts/config 的【续行里】，而它们前面就是上述那段普通 # 注释 ——
+#   shell 里注释行会【终止续行】，于是那条命令提前结束，这 5 项一个都没被
+#   应用，只在 stderr 留下一句 "--enable: command not found"。
+#   现有机器没出问题纯属侥幸：.config 里早就有它们（更早的正确版本写进去的）；
+#   在一棵新树上从 buildbot defconfig 出发就会重现 cgroup v1 开机失败。
+#   → 所以这里【单独起一条命令】，注释保持普通 # 写法；并且把这 4 个符号
+#     补进了下面的 MUST_Y 断言表，以后再断会当场报错而不是静默跳过。
+./scripts/config --file "$OUT/.config" \
     --enable PM_WAKELOCKS \
-    \
-    `# —— cgroup v1：6.12+ 拆分后默认关。Android cgroups.json 要求 cpuset 走 v1，` \
-    `#    缺了会 SetupCgroups 失败 -> bootstrap-apexd-failed 复位（findings 第 8 节）——` \
     --enable CPUSETS_V1 --enable MEMCG_V1 \
-    --enable UCLAMP_TASK --enable UCLAMP_TASK_GROUP \
+    --enable UCLAMP_TASK --enable UCLAMP_TASK_GROUP
+
+./scripts/config --file "$OUT/.config" \
     \
     `# —— buildbot defconfig 是 Ubuntu 取向：以下关键驱动全是 =m，` \
     `#    而 Android 侧没有任何模块加载机制，必须 =y。` \
@@ -171,6 +184,15 @@ OUT="${1:?用法: $0 <kernel-out-dir>}"
 #   整条通路与实测读数（Z≈9.87）见 docs/stage4-findings.md #37。
 ./scripts/config --file "$OUT/.config" --enable QCOM_FASTRPC
 
+# ─── Stage 6: EFI_ZBOOT（把内核编成自解压的 EFI 应用）───
+# ★ 为什么要它：本机的内核是【ESP 上的文件】，而 ESP 只有 300 MiB。
+#   A/B 两个槽位各存一份内核后，未压缩的 Image（约 39 MB）会把 ESP 挤爆
+#   （还要和固件自己那个 73 MB 的 Persisted_Capsules.bin 共处）。
+#   EFI_ZBOOT 产出 arch/arm64/boot/vmlinuz.efi —— 自解压的 PE，十几 MB。
+# ★ 它【不影响】Image 的产出：两个都会有，可以并行对照。
+#   依赖 EFI_GENERIC_STUB（本机已 =y）。
+./scripts/config --file "$OUT/.config" --enable EFI_ZBOOT
+
 # ─── olddefconfig + 断言（止损"=m 坑"）───
 # 这个坑已经踩了 13 次：`scripts/config --enable X` 写进去了，olddefconfig
 # 却可能因为依赖把它降回 =m（或压根没有该符号），而 Android **不加载任何模块**
@@ -178,7 +200,12 @@ OUT="${1:?用法: $0 <kernel-out-dir>}"
 # 所以：olddefconfig 由脚本自己跑（顺手把 ARCH=arm64 这个致命参数固定住），
 # 跑完立刻断言关键符号必须是 y，不是就非零退出。
 echo "== 跑 olddefconfig（ARCH=arm64 必带，否则 arm64 符号会被删光）=="
-make ARCH=arm64 O="$OUT" olddefconfig >/dev/null || exit 1
+# ⚠️★ CROSS_COMPILE 必须带：olddefconfig 会用编译器去评估 CC_HAS_* 之类的
+#   能力符号。在 x86 宿主上不带它就是用【宿主 gcc】评估 arm64 内核，
+#   结果是一批符号被静默改掉（本仓 2026-08-20 之前就发生过 .config 漂移）。
+#   可用 CROSS_COMPILE=... 覆盖；默认与 buildbot 的 CI 一致。
+CROSS_COMPILE="${CROSS_COMPILE:-aarch64-linux-gnu-}"
+make ARCH=arm64 CROSS_COMPILE="$CROSS_COMPILE" O="$OUT" olddefconfig >/dev/null || exit 1
 
 MUST_Y="
 BLK_DEV_DM SECURITY_SELINUX EROFS_FS F2FS_FS DM_VERITY PM_WAKELOCKS
@@ -189,6 +216,7 @@ SND_SOC_SC8280XP SND_SOC_WSA883X SND_SOC_WCD938X SOUNDWIRE_QCOM
 SND_SOC_LPASS_RX_MACRO SND_SOC_LPASS_TX_MACRO SND_SOC_LPASS_VA_MACRO
 SND_SOC_LPASS_WSA_MACRO SND_SOC_QDSP6 QCOM_PD_MAPPER
 FUSE_FS IIO QCOM_SPMI_ADC5 QCOM_FASTRPC
+CPUSETS_V1 MEMCG_V1 UCLAMP_TASK UCLAMP_TASK_GROUP EFI_ZBOOT EFI_STUB EFI_GENERIC_STUB
 "
 bad=0
 for s in $MUST_Y; do
