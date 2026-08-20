@@ -17,6 +17,8 @@ upstream drivers.
 
 [**中文说明 → README.zh-CN.md**](README.zh-CN.md)
 
+**Talk to us:** [Telegram](https://t.me/gaokunAndroid) · QQ group **920133252**
+
 ---
 
 ## Status
@@ -190,6 +192,19 @@ Concrete, well-scoped work, roughly easiest first:
 
 If you have a MateBook E Go and want to test, open an issue — reports of what
 breaks are as useful as patches. Please include your BIOS version and SKU.
+
+---
+
+## Community
+
+| | |
+|---|---|
+| **Telegram** | [t.me/gaokunAndroid](https://t.me/gaokunAndroid) |
+| **QQ group** | **920133252** |
+| Issues | [GitHub issues](../../issues) — the right place for anything that needs a paper trail |
+
+Chat is good for "is this normal?"; open an issue for anything reproducible, so
+it does not get lost in scrollback.
 
 ---
 

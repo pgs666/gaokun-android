@@ -13,6 +13,8 @@ recovery 分区，也没有串口。这不是一次常规移植 —— 它是 **
 
 [**English → README.md**](README.md)
 
+**交流：**[Telegram](https://t.me/gaokunAndroid) · QQ 群 **920133252**
+
 ---
 
 ## 现状
@@ -175,6 +177,19 @@ Android 相关的配置断言在
 
 如果你手上有 MateBook E Go 想帮忙测，欢迎开 issue —— **报告哪里坏了和交补丁
 一样有用**。请附上你的 BIOS 版本和 SKU。
+
+---
+
+## 社区
+
+| | |
+|---|---|
+| **Telegram** | [t.me/gaokunAndroid](https://t.me/gaokunAndroid) |
+| **QQ 群** | **920133252** |
+| Issues | [GitHub issues](../../issues) —— 需要留痕的事走这里 |
+
+群里适合问"这样是不是正常的"；**只要能复现，就开个 issue**，
+否则聊天记录一刷就没了。
 
 ---
 
