@@ -328,6 +328,21 @@ PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/bin/smmu-nostall.sh:$(TARGET_COPY_OUT_VENDOR)/bin/smmu-nostall.sh \
     $(LOCAL_PATH)/etc/smmustall.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/smmustall.rc
 
+# ★ 资源 overlay —— 把 crDroid 的系统内 Updater 指向本项目（M6）。
+#
+# 为什么必须是【构建期】overlay 而不是运行时 RRO：
+#   packages/apps/Updater 没有为这些字符串声明 <overlayable>（实测 grep 全空），
+#   而 Android 10 起运行时 overlay 只能改目标声明过 overlayable 的资源，
+#   RRO 会被直接拒掉。
+# 为什么必须改资源而不是设个属性：
+#   UpdatesNetworkDataSource.kt 只读 R.string.updater_server_url，
+#   没有任何属性可以覆盖它（grep 确认）。
+#
+# overlay 目录下的路径要镜像【模块自己的 resource_dirs】：
+#   packages/apps/Updater/app/Android.bp → resource_dirs: ["src/main/res"]
+# 所以是 overlay/packages/apps/Updater/app/src/main/res/…
+DEVICE_PACKAGE_OVERLAYS += device/huawei/gaokun3/overlay
+
 # ★ 用户态 CPU 温控 —— 补主线 DTS 的缺口（2026-08-20 M4 实测发现）。
 # 主线 sc8280xp.dtsi 里总共只有一个 cooling-maps，就在 gpu-thermal 下面；
 # cpu0..cpu7-thermal / cluster0-thermal 只有一条 110C 的 critical trip，

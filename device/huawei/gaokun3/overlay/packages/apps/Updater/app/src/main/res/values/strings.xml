@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Point crDroid's in-system updater (org.lineageos.updater) at this project.
+
+  Build-time resource overlay, not a runtime RRO: the Updater does not declare
+  <overlayable> for any of these, so a runtime overlay would be rejected.
+  DEVICE_PACKAGE_OVERLAYS in device.mk feeds this directory to Soong, and the
+  path below mirrors the module's resource_dirs
+  (packages/apps/Updater/app/Android.bp → resource_dirs: ["src/main/res"]).
+
+  There is no property to override the server URL — UpdatesNetworkDataSource.kt
+  reads R.string.updater_server_url and nothing else — so overlaying the string
+  is the only way in.
+-->
+<resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
+
+    <!--
+      ★ Must be raw.githubusercontent.com, not github.com/…/raw/….
+
+      UpdatesNetworkDataSource builds its OkHttp client with
+      .followRedirects(false), so any URL that answers 3xx fails outright.
+      Measured from the device itself (2026-08-20):
+          raw.githubusercontent.com/…            HTTP 200   ← this one
+          cdn.jsdelivr.net/gh/…                  HTTP 200   (works, but the
+                                                  @main CDN cache can lag by
+                                                  days, which would hide a
+                                                  release)
+          github.com/…/raw/…                     HTTP 302   ← would fail
+      It also enforces https:// with a require() — plain http is a hard error.
+
+      {device} is replaced with DeviceInfoUtils.device, which reads
+      ro.crdroid.device (= gaokun3), so this resolves to ota/gaokun3.json —
+      the manifest committed in this repository. Keeping the placeholder rather
+      than hardcoding the filename means a second device would work unchanged.
+    -->
+    <string name="updater_server_url" translatable="false">https://raw.githubusercontent.com/vahiru/gaokun-android/main/ota/{device}.json</string>
+
+    <!--
+      The stock strings point at crdroid.net and SourceForge, which have never
+      heard of this device — every link in the app would 404. Send them here
+      instead. The %1$s the framework passes is the device name; a string
+      without a placeholder simply ignores it.
+    -->
+    <string name="menu_downloads_url" translatable="false">https://github.com/vahiru/gaokun-android/releases</string>
+    <string name="menu_changelog_url" translatable="false">https://github.com/vahiru/gaokun-android/releases</string>
+    <string name="report_issue_url" translatable="false">https://github.com/vahiru/gaokun-android/issues/new</string>
+    <string name="blocked_update_info_url" translatable="false">https://github.com/vahiru/gaokun-android/blob/main/docs/INSTALL.md</string>
+
+</resources>
