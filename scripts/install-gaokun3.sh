@@ -50,6 +50,9 @@ SUPER_SIZE_MIB=12288
 RESCUE_SIZE_MIB=24576
 ESP_SIZE_MIB=300
 MISC_SIZE_MIB=4
+# boot_a / boot_b：标准 Android boot 镜像（header v2，kernel+ramdisk+dtb 一体）。
+# 内容约 27 MiB；64 MiB 与 BoardConfig.mk 的 BOARD_BOOTIMAGE_PARTITION_SIZE 对齐。
+BOOT_SIZE_MIB=64
 METADATA_SIZE_MIB=32
 
 die() { echo "!! $*" >&2; exit 1; }
@@ -61,15 +64,16 @@ say() { echo; echo "══ $*"; }
 [ -d "$REL" ] || die "no such directory: $REL"
 [ -b "$DISK" ] || die "no such disk: $DISK"
 
-for t in sgdisk partprobe mkfs.ext4 mkfs.vfat simg2img bootctl rsync; do
+for t in sgdisk partprobe mkfs.ext4 mkfs.vfat simg2img bootctl rsync python3; do
     command -v "$t" >/dev/null || die "missing tool: $t (apt install gdisk android-sdk-libsparse-utils dosfstools systemd-boot rsync)"
 done
 
 need() { [ -f "$REL/$1" ] || die "release is missing $1"; }
 need super.img
-need Image
-need sc8280xp-huawei-gaokun3.dtb
-need ramdisk.img
+# ★ boot.img 是标准 Android boot 镜像，会同时写进 boot_a 与 boot_b。
+#   ESP 上给 systemd-boot 用的那三个文件由它解包而来（见下面的 ESP 段）——
+#   boot 分区是唯一真相源。
+need boot.img
 
 say "Target disk"
 sgdisk -p "$DISK" || true
@@ -89,6 +93,8 @@ sgdisk \
     -n "2:0:+${MISC_SIZE_MIB}M"     -t 2:8300 -c 2:"misc" \
     -n "3:0:+${METADATA_SIZE_MIB}M" -t 3:8300 -c 3:"metadata" \
     -n "4:0:+${SUPER_SIZE_MIB}M"    -t 4:8300 -c 4:"super" \
+    -n "7:0:+${BOOT_SIZE_MIB}M"     -t 7:8300 -c 7:"boot_a" \
+    -n "8:0:+${BOOT_SIZE_MIB}M"     -t 8:8300 -c 8:"boot_b" \
     -n "5:0:+${RESCUE_SIZE_MIB}M"   -t 5:8300 -c 5:"rescue" \
     -n "6:0:0"                      -t 6:8300 -c 6:"userdata" \
     "$DISK"
@@ -126,6 +132,63 @@ lp=$(dd if="$(p 4)" bs=1 skip=4096 count=4 2>/dev/null | od -An -tx1 | tr -d ' \
 [ "$lp" = "67446c61" ] || die "super has no LP geometry magic at offset 4096 (got '$lp')"
 echo "  LP geometry magic OK"
 
+# ── boot_a / boot_b ────────────────────────────────────────────────────────
+# Standard Android boot images, written to both slots so either one boots a
+# freshly installed machine. update_engine owns them from here on: `boot` is
+# in AB_OTA_PARTITIONS, so a kernel change ships as an ordinary OTA.
+say "Writing boot_a / boot_b"
+for n in 7 8; do
+    dd if="$REL/boot.img" of="$(p $n)" bs=4M conv=fsync status=none
+done
+sync
+echo "  boot.img -> $(p 7) and $(p 8)"
+
+# The bootloader here is systemd-boot, which cannot read an Android boot
+# image — it loads plain files from the ESP. So unpack the image and put the
+# pieces on the ESP, once per slot. The boot partitions stay the source of
+# truth; these are derived copies, refreshed by the OTA postinstall hook
+# (vendor/bin/gaokun3-ota-postinstall.sh) on every update.
+#
+# ⚠️ This mirrors device/huawei/gaokun3/bootimg/bootimg_extract.cpp, which is
+# what runs on the device. Two implementations because they run in different
+# worlds (a plain Linux live image here, Android there). Both were checked
+# against the same boot.img and produce byte-identical output.
+say "Unpacking boot.img for systemd-boot"
+BOOTPARTS=$(mktemp -d)
+python3 - "$REL/boot.img" "$BOOTPARTS" <<'PYEOF'
+import struct, sys, os
+img, out = sys.argv[1], sys.argv[2]
+with open(img, "rb") as f:
+    hdr = f.read(1664)
+    if hdr[:8] != b"ANDROID!":
+        sys.exit("not an Android boot image (bad magic)")
+    u32 = lambda off: struct.unpack_from("<I", hdr, off)[0]
+    kernel_size, ramdisk_size, second_size = u32(8), u32(16), u32(24)
+    page, ver = u32(36), u32(40)
+    if ver != 2:
+        sys.exit("expected boot header v2, got %d" % ver)
+    recovery_dtbo_size, dtb_size = u32(1632), u32(1648)
+    align = lambda x: (x + page - 1) // page * page
+    off = page
+    parts = []
+    for size, name in ((kernel_size, "Image"), (ramdisk_size, "ramdisk.img")):
+        parts.append((off, size, name))
+        off += align(size)
+    off += align(second_size) + align(recovery_dtbo_size)
+    parts.append((off, dtb_size, "gaokun3.dtb"))
+    for start, size, name in parts:
+        if size == 0:
+            sys.exit("%s is empty in the boot image" % name)
+        f.seek(start)
+        data = f.read(size)
+        if len(data) != size:
+            sys.exit("short read for %s" % name)
+        with open(os.path.join(out, name), "wb") as o:
+            o.write(data)
+        print("  %-12s %10d bytes" % (name, size))
+PYEOF
+[ -s "$BOOTPARTS/Image" ] || die "boot.img unpack produced no kernel"
+
 # ── rescue system ──────────────────────────────────────────────────────────
 say "Installing the rescue system"
 mkdir -p /mnt/rescue && mount "$(p 5)" /mnt/rescue
@@ -158,12 +221,18 @@ bootctl --esp-path=/mnt/esp install --no-variables
 # EFI variables existing. The removable-media fallback path EFI/BOOT/BOOTAA64.EFI
 # that bootctl writes is what this firmware actually uses.
 
-mkdir -p "/mnt/esp/$MID/android" "/mnt/esp/$MID/rescue"
-cp "$REL/Image"                          "/mnt/esp/$MID/android/Image"
-cp "$REL/sc8280xp-huawei-gaokun3.dtb"    "/mnt/esp/$MID/android/gaokun3.dtb"
-cp "$REL/ramdisk.img"                    "/mnt/esp/$MID/android/ramdisk.img"
-cp "$REL/Image"                          "/mnt/esp/$MID/rescue/Image"
-cp "$REL/sc8280xp-huawei-gaokun3.dtb"    "/mnt/esp/$MID/rescue/gaokun3.dtb"
+# One directory per slot. The OTA postinstall hook writes only into the
+# directory of the slot it just flashed, so an update can never touch the
+# kernel the machine is currently running — that is what makes rollback safe.
+mkdir -p "/mnt/esp/$MID/android/slot_a" "/mnt/esp/$MID/android/slot_b"          "/mnt/esp/$MID/rescue"
+for sl in a b; do
+    cp "$BOOTPARTS/Image"       "/mnt/esp/$MID/android/slot_$sl/Image"
+    cp "$BOOTPARTS/gaokun3.dtb" "/mnt/esp/$MID/android/slot_$sl/gaokun3.dtb"
+    cp "$BOOTPARTS/ramdisk.img" "/mnt/esp/$MID/android/slot_$sl/ramdisk.img"
+done
+# The rescue Linux runs the same kernel; it just gets its own initrd.
+cp "$BOOTPARTS/Image"       "/mnt/esp/$MID/rescue/Image"
+cp "$BOOTPARTS/gaokun3.dtb" "/mnt/esp/$MID/rescue/gaokun3.dtb"
 [ -f /boot/initrd.img ] && cp /boot/initrd.img "/mnt/esp/$MID/rescue/initrd.img" || \
   cp "$(ls -1t /boot/initrd.img-* 2>/dev/null | head -1)" "/mnt/esp/$MID/rescue/initrd.img"
 
@@ -175,20 +244,24 @@ deferred_probe_timeout=10 console=tty0 iommu.passthrough=0 iommu.strict=0 \
 clk_ignore_unused pd_ignore_unused arm64.nopauth efi=noruntime fbcon=rotate:1 \
 usbhid.quirks=0x12d1:0x10b8:0x20000000"
 
-# One entry per A/B slot. They point at the same kernel and ramdisk — the
-# kernel is not slotted, only the dynamic partitions inside super are — and
-# differ solely in androidboot.slot_suffix. The boot_control HAL switches
-# between them by rewriting `default` in loader.conf, matching on the glob
-# *-android-a.conf / *-android-b.conf, so these filenames are load-bearing.
+# One entry per A/B slot, each pointing at its own slot directory — the kernel
+# is slotted now, exactly like the dynamic partitions inside super. The
+# boot_control HAL switches between them by rewriting `default` in loader.conf,
+# matching on the glob *-android-a.conf / *-android-b.conf, so these filenames
+# are load-bearing.
+#
+# The paths below are also load-bearing: the OTA postinstall hook writes
+# Image / gaokun3.dtb / ramdisk.img into slot_<suffix> under exactly these
+# names, so an entry and its hook have to agree. Change one, change both.
 for s in a b; do
     cat > "/mnt/esp/loader/entries/$MID-android-$s.conf" <<EOF
 title      crDroid 16.0 (gaokun3) — slot _$s
 version    gaokun3-slot-$s
 sort-key   zandroid$s
 options    $ANDROID_CMDLINE androidboot.slot_suffix=_$s
-linux      /$MID/android/Image
-devicetree /$MID/android/gaokun3.dtb
-initrd     /$MID/android/ramdisk.img
+linux      /$MID/android/slot_$s/Image
+devicetree /$MID/android/slot_$s/gaokun3.dtb
+initrd     /$MID/android/slot_$s/ramdisk.img
 EOF
 done
 
@@ -238,6 +311,8 @@ Installed on $DISK:
   misc      $(p 2)
   metadata  $(p 3)
   super     $(p 4)
+  boot_a    $(p 7)   (Android boot image, in AB_OTA_PARTITIONS)
+  boot_b    $(p 8)
   rescue    $(p 5)   (default boot entry, hostname gaokun3-rescue)
   userdata  $(p 6)
 

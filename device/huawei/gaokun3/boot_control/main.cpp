@@ -21,36 +21,25 @@ using aidl::android::hardware::boot::IBootControl;
 
 namespace {
 
-// ★ Make libboot_control count exactly two slots.
+// ★ 历史记录：这里曾有一个 EnsureSlotProbeHints()，把
+//   /dev/block/by-name/boot_a 与 boot_b symlink 到 /dev/null。
 //
-// InitDefaultBootloaderControl() works out the slot count by stat()ing
-// <dirname(misc)>/boot_a, boot_b, boot_c, boot_d — "a partition required by
-// Android Bootloader Requirements". This machine has no boot partition at
-// all: the kernel, DTB and ramdisk are plain files on the ESP, loaded by
-// systemd-boot. So the probe finds nothing, and the code deliberately falls
-// back to kMaxNumSlots, which is 4.
+//   起因是 InitDefaultBootloaderControl() 靠 stat() 探测
+//   <dirname(misc)>/boot_a..boot_d 来数槽位数，而本机当年【根本没有 boot
+//   分区】（内核/DTB/ramdisk 是 ESP 上的文件），探不到就按设计回退成
+//   kMaxNumSlots = 4。后果很阴：update_engine 取 (current+1) % num_slots，
+//   第一次 OTA 还能 _a -> _b，第二次就会切到根本不存在的 _c ——
+//   故障要晚一个版本才爆。
 //
-// That is not cosmetic. update_engine picks its target as
-// (current + 1) % num_slots, so the first OTA would correctly go _a -> _b,
-// and the second would go _b -> _c — a slot that does not exist anywhere in
-// super. The failure would land one update later than the change that caused
-// it, which is the worst kind.
+//   2026-08-20 起本机按 Android 分区规范有了真的 boot_a / boot_b（各 64 MiB，
+//   boot 也进了 AB_OTA_PARTITIONS），探测自然数出 2，这个补丁就不需要了。
+//   ⚠️★ 而且必须【删掉】而不是留着：那两条路径现在指向真实分区，
+//   一旦这段代码抢在 ueventd 建立 by-name 链接之前跑成功，
+//   update_engine 就会把 boot 镜像写进 /dev/null —— 静默地毁掉整个更新。
+//   （旧代码有 errno != EEXIST 的判断，所以实际没出事，但这个雷不该留。）
 //
-// Pointing the two probe paths at /dev/null is the honest representation:
-// there is no boot partition for either slot. stat() follows symlinks and
-// succeeds, so the probe counts 2 and stops. Nothing ever reads or writes
-// these — `boot` is deliberately absent from AB_OTA_PARTITIONS — and if
-// something ever did, writing to /dev/null is harmless, which is why they
-// point there rather than at a real partition.
-//
-// Done here, before BootControl is constructed, so it cannot race the
-// init.rc trigger ordering that decides when class early_hal starts.
-void EnsureSlotProbeHints() {
-    for (const char* path : {"/dev/block/by-name/boot_a", "/dev/block/by-name/boot_b"}) {
-        if (symlink("/dev/null", path) != 0 && errno != EEXIST) {
-            PLOG(WARNING) << "could not create slot-count probe hint " << path
-                          << " — libboot_control may report 4 slots instead of 2";
-        }
+//   下面 main() 里那句"槽位数必须是 2"的断言保留着，它现在校验的是
+//   真实分区被正确探测到。
     }
 }
 
@@ -58,8 +47,6 @@ void EnsureSlotProbeHints() {
 
 int main(int, char* argv[]) {
     android::base::InitLogging(argv, android::base::KernelLogger);
-
-    EnsureSlotProbeHints();
 
     ABinderProcess_setThreadPoolMaxThreadCount(0);
     std::shared_ptr<IBootControl> service = ndk::SharedRefBase::make<BootControl>();

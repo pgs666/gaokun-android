@@ -198,3 +198,19 @@ PRODUCT_MANUFACTURER := Huawei
 
 # API 等级：不声明 vendor 冻结，按当前平台走（Android 16 = 36）
 PRODUCT_SHIPPING_API_LEVEL := 36
+
+# ─── 关掉 VINTF 的内核兼容性检查 ───
+#
+# ★ 有了真 boot.img 之后这个检查才真正生效（此前没有内核可提取，只会打一句
+#   "Neither INSTALLED_KERNEL_TARGET nor INSTALLED_BOOTIMAGE_TARGET is defined"
+#   的 warning）。开着会构建失败：
+#     ERROR: No kernel entry found for kernel version 7.2 at kernel FCM
+#            version 202504   （Minimum LTS: 6.12.0）
+#   本机跑的是【主线 v7.2-rc2】，比任何 FCM 认识的版本都新，而且 checker 连
+#   "7.2.0-rc2-gaokun3+" 都解析不了（日志里三行 Cannot parse 就是它）。
+#
+# 这个变量正是 AOSP 给出的逃生口（build/make/core/Makefile:5497 起整段由它控制，
+# 那句 warning 自己也把它列为第 4 种解法）。本机不追 VTS/CTS、不启用 AVB，
+# 关掉没有副作用 —— 但要记住：**这道检查本来是防"内核与框架要求不匹配"的**，
+# 换 ROM 大版本时得自己留意内核是否还满足新框架的假设。
+PRODUCT_OTA_ENFORCE_VINTF_KERNEL_REQUIREMENTS := false

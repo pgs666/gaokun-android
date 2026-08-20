@@ -92,18 +92,37 @@ flash_boot() {
   echo "  ramdisk $I"
   echo "  DTB    $D"
 
-  pull "~/gaokun/kernel-out/arch/arm64/boot/Image" /tmp/Image
+  # ★ 用 vmlinuz.efi（EFI_ZBOOT 自解压 PE，13 MB）而不是 Image（37 MB）：
+  #   ESP 只有 300 MiB，而 A/B 两个槽各存一份。
+  pull "~/gaokun/kernel-out/arch/arm64/boot/vmlinuz.efi" /tmp/vmlinuz.efi
   pull "~/gaokun/kernel-out/arch/arm64/boot/dts/qcom/sc8280xp-huawei-gaokun3.dtb" /tmp/gk3.dtb
   pull "$OUT/ramdisk.img" /tmp/ramdisk.img
 
-  for f in "$K" "$I" "$D"; do
-    [ -f "$f" ] && sudo -n cp "$f" "$f.bak-prev"
-  done
-  sudo -n cp /tmp/Image       "$K"
+  # ⚠️★ 不再留 .bak-prev 备份。原先每次部署都把三个文件各备份一份，
+  #   把 296 MiB 的 ESP 吃到 95%（63 MB 全是历史备份），下一次部署就会写出
+  #   被截断的内核。现在【另一个槽位就是备份】—— 这正是 A/B 的意义：
+  #   要回退就 bootctl set-oneshot 到另一个槽的条目。
+  sudo -n cp /tmp/vmlinuz.efi "$K"
   sudo -n cp /tmp/ramdisk.img "$I"
   sudo -n cp /tmp/gk3.dtb     "$D"
   sync
   echo "内核 / DTB / ramdisk 已写入【条目实际引用的路径】"
+
+  # ★ 同时更新该槽的 boot 分区，否则 ESP 上的派生文件与 boot 分区会不一致：
+  #   下一次 OTA 的 postinstall 是从 boot 分区解包的，不同步就会把机器悄悄
+  #   退回到旧内核。boot 分区是唯一真相源，ESP 只是派生物。
+  local slot
+  slot=$(echo "$ENTRY" | sed -n 's/.*-android-\([ab]\)\.conf/\1/p')
+  if [ -n "$slot" ] && [ -b "/dev/disk/by-partlabel/boot_$slot" ]; then
+    if pull "$OUT/boot.img" /tmp/boot.img; then
+      sudo -n dd if=/tmp/boot.img of="/dev/disk/by-partlabel/boot_$slot"                  bs=4M conv=fsync status=none
+      sync
+      echo "boot.img 也已写入 boot_$slot（与 ESP 上的派生文件保持一致）"
+    fi
+  else
+    echo "  ⚠️ 没能从条目名推出槽位或找不到 boot_$slot 分区 —— boot 分区未更新。"
+    echo "     下次 OTA 的 postinstall 会从 boot 分区解包，两边不一致会退回旧内核。"
+  fi
   echo "  ⚠️ 起来后必须核对：adb shell uname -a 的编译时间要与本次内核一致"
 }
 
