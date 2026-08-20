@@ -235,6 +235,41 @@ OUT="${1:?用法: $0 <kernel-out-dir>}"
 #    但看到它出现在 .config 里不要当成配错了。
 ./scripts/config --file "$OUT/.config"     --enable MEDIA_SUPPORT     --enable MEDIA_PLATFORM_SUPPORT     --enable VIDEO_DEV     --enable V4L_MEM2MEM_DRIVERS     --enable VIDEOBUF2_DMA_CONTIG     --enable V4L2_MEM2MEM_DEV     --enable SM_VIDEOCC_8350     --enable VIDEO_QCOM_VENUS
 
+# ─── 电源管理调试（对着本机头号缺陷：s2idle 醒不回来）───
+# 本机 s2idle 挂得下去、醒不回来，约 20–40 秒后整机复位，Ubuntu 同款内核复现
+# （M4 定性）。M4 卡在没法继续二分：`/sys/power/pm_test` 需要 CONFIG_PM_DEBUG，
+# 而它没开。这里补上，让后来的人不用先自己编一个内核。
+#
+#   PM_DEBUG        → /sys/power/pm_test（分层二分：freezer/devices/platform/
+#                     processors/core）与 /sys/power/pm_print_times
+#   PM_SLEEP_DEBUG  → /sys/power/pm_debug_messages
+#   PM_ADVANCED_DEBUG → 每个设备的 power/ sysfs 属性
+#   ★ DPM_WATCHDOG  → 某个设备的 suspend/resume 回调卡住时 panic 并打出该回调的栈，
+#                     记录进 pstore；本机 efi_pstore 是通的，所以抓得到。
+#
+# ⚠️★ DPM_WATCHDOG 的依赖是 `PM_DEBUG && PSTORE && EXPERT`
+#   （kernel/power/Kconfig）。本机 PSTORE 早就 =y，但 **EXPERT 没开**，
+#   所以光 --enable DPM_WATCHDOG 会静默无效 —— 断言会当场抓住它。
+#   故这里必须一并打开 EXPERT（它只是"取消隐藏"一批选项，不改已有取值）。
+#
+# ⚠️★ **`PM_TRACE_RTC` 在 arm64 上不存在** —— 它 `depends on X86`
+#   （kernel/power/Kconfig）。而 `PM_TRACE` 是个没有 prompt 的 bool，只能由
+#   PM_TRACE_RTC 去 select。这很可惜：那个机制（把最后执行的设备
+#   suspend/resume 哈希写进 RTC，机器不干净复位后仍能读出来）
+#   恰好就是为本机这种"userspace 已冻结、journald 来不及落盘、
+#   clean hang 不产生 panic"的症状设计的。**别再去找它了。**
+#   arm64 上的替代品就是上面的 DPM_WATCHDOG + pstore。
+#
+# ⚠️ DPM_WATCHDOG_TIMEOUT 保持默认 120 秒 —— 发布内核里不要压低，
+#   否则某个合法的慢设备会被误判成挂死。调试时在测试内核里单独设成 10 秒
+#   （本机 ~13 秒就复位，120 秒永远轮不到它开火）。
+./scripts/config --file "$OUT/.config" \
+    --enable EXPERT \
+    --enable PM_DEBUG \
+    --enable PM_SLEEP_DEBUG \
+    --enable PM_ADVANCED_DEBUG \
+    --enable DPM_WATCHDOG
+
 # ─── olddefconfig + 断言（止损"=m 坑"）───
 # 这个坑已经踩了 13 次：`scripts/config --enable X` 写进去了，olddefconfig
 # 却可能因为依赖把它降回 =m（或压根没有该符号），而 Android **不加载任何模块**
@@ -261,6 +296,7 @@ FUSE_FS IIO QCOM_SPMI_ADC5 QCOM_FASTRPC
 CPUSETS_V1 MEMCG_V1 UCLAMP_TASK UCLAMP_TASK_GROUP EFI_ZBOOT EFI_STUB EFI_GENERIC_STUB
 MEDIA_SUPPORT MEDIA_PLATFORM_SUPPORT VIDEO_DEV V4L_MEM2MEM_DRIVERS
 VIDEOBUF2_DMA_CONTIG V4L2_MEM2MEM_DEV SM_VIDEOCC_8350 VIDEO_QCOM_VENUS
+EXPERT PM_DEBUG PM_SLEEP_DEBUG PM_ADVANCED_DEBUG DPM_WATCHDOG
 "
 bad=0
 for s in $MUST_Y; do
