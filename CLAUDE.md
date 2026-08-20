@@ -5,9 +5,41 @@
 在华为 MateBook E Go（Snapdragon 8cx Gen 3 / sc8280xp，代号 gaokun）上跑原生 AOSP，
 最终目标是能稳定运行 arm64 手游。
 
-**当前阶段：Stage 6 M8 完成 — ★系统内 OTA 接通 R2；★CPU 温控 DTS 根治；★渲染 120 Hz；★刷机后脚本已彻底取消**（每次开工时更新这一行）
+**当前阶段：Stage 6 M9 — ★传感器翻案：加速度计在主线上实测通了（Z≈9.87），自动旋转变成可达；光感不通**（每次开工时更新这一行）
 
-> **★★ Stage 6 M5（2026-08-20）：M4 的成果全部固化进镜像 + 传感器判死。**
+> **★★ Stage 6 M9（2026-08-20）：传感器翻案 —— 加速度计真的通了。**
+>
+> ★**推翻 M5 的"主线此路不通"**（下面那段 M5 原文保留，但结论已作废）。
+> 一位贡献者给了 Linux 侧部署指南（`docs/contrib/slpi-sensors-deploy.md`），
+> 在救援 Ubuntu 上逐条复现：**静止时 Z≈9.87 m/s²，15 秒 131 行读数**。
+> 这一个数字验证了整条通路
+> `fastrpc → hexagonrpcd 的 VFS → SLPI 上的 DSP 注册表 → SSC → QMI → libssc`。
+> 关键在于**思路要换**：不是 AP 去驱动芯片（AP 确实无总线可达，M5 这半截是对的），
+> 而是**AP 给 DSP 当只读文件服务器**。
+> 一键复现 `scripts/slpi-sensors-setup.sh`，案卷 `docs/stage4-findings.md` #37。
+> - ★**于是「自动旋转」对本机是可达的**，缺的只是 **Android 侧 sensors HAL**
+>   （把 hexagonrpcd 移过去 + 拿 libssc 包一个 AIDL HAL）。README 招募项已重写
+>   —— 难的那一半做完了，据我们所知其他 sc8280xp 设备都没跑通过。
+> - ❌ **光感（tcs3701）不通**：使能后从不返回读数，而且**会污染整个 SSC 会话**
+>   —— 之后连加速度计也读不到，必须重启 hexagonrpcd（★还要等约 20 秒沉降，
+>   6 秒就读实测是 0 行；**"读不到"不等于"坏了"**）。
+> - ❌ **负面结果：别用 `sscregistrygen` 预生成注册表。** 生成 142 个文件后
+>   加速度计一起坏掉，挪走 141 个只留**空 registry** 当场恢复（干净 A/B）。
+> - ★**"给 hexagonfs 加写入"不是小补丁**：`hexagonfs.h:34-45` 的 ops 表只有
+>   close/openat/readdir/read/stat/seek，**没有 write，只读是设计使然**；
+>   且 DSP 想写的那个目录是 `hfs_mkdir` 出来的虚拟目录，没有后端可写。属上游活。
+> - ❌ **出厂校准永久丢失**：它存在本机 Windows 的 DriverData 里、不在任何驱动包中，
+>   而本机 Windows 已抹除 → **安装矩阵全零**（libssc 退回单位矩阵），轴向可能要
+>   在上层纠正。⚠️ **给还留着 Windows 的人：先把那个 registry 目录拷出来再装系统。**
+> - ⚠️ 两条我自己下错又更正的判断：①"registry 服务起不来所以光感失败"——错，
+>   那份 debug 日志是在**我自己装出来的坏状态**下抓的（**诊断日志必须在已知
+>   good 状态下重抓**）；②"`Handover signaled` 是 SLPI 崩溃循环"——错，良性噪声，
+>   对照实验里**工作正常的加速度计同样每 12 秒 13 条**。
+> - ⚠️ 环境坑：`droid-juicer` 0.4.2 会无限 `openat` 死循环把 apt 卡死 43 分钟
+>   （`systemctl mask` 掉）；`libssc` 上游已删 `-Dmocking` 选项，照指南抄会报错。
+
+> **★★ Stage 6 M5（2026-08-20）：M4 的成果全部固化进镜像 + 传感器判死
+> （⚠️「判死」这半截已被上面的 M9 推翻）。**
 >
 > ★**用户实测：原神画质开到极高流畅可玩。** GPU 91% 时间待在最低档 270 MHz、
 > 峰值 690 MHz、最高温 50 °C、零降频、`GMU 错误 0 / a6xx_recover 0 / SMMU fault 0`。
@@ -37,14 +69,18 @@
 >   > 附带查明：**`efi=noruntime` 不妨碍 `bootctl`**，oneshot 实测可写可回读，
 >   > 远程救援闭环是可靠的。
 >
-> ★**传感器：不是缺 DTS 节点，是整套跑在 SLPI DSP 上 —— 主线此路不通。**
+> ★**传感器：不是缺 DTS 节点，是整套跑在 SLPI DSP 上。**
+> ⚠️**"主线此路不通"这个结论已被 M9 推翻**（加速度计实测已通）——
+> 下面的"AP 无总线可达"是对的，错的是由此推出"不可达"：
+> 正解是 AP 给 DSP 当文件服务器，不是 AP 直接驱动芯片。
 > 从本机 Windows 分区读出驱动库：没有任何 AP 侧传感器芯片驱动，只有
 > `qcsensors.inf` + `qcsensorsconfigqrd8280`（里面是 `sns_*` 的 SEE 模块配置
 > 和 **`libsdsprpc.dll` = Sensor DSP RPC**）。器件是 `sh3001`(IMU)、
 > `tcs3701`(ams 光感+接近, I2C 0x39)、`sy3133cs`、`t1000`、`stm_lid_angle`(铰链角)，
 > **全挂在 SLPI 自己的总线上，AP 够不着**。
-> → **自动旋转、自动亮度在主线上做不了**（要有人写 SEE 的 QMI/FastRPC 客户端，
-> 至今没有任何 sc8280xp 设备做到，X13s 也没有）。★**游戏不受影响。**
+> → ~~自动旋转、自动亮度在主线上做不了~~ **已作废，见 M9**：加速度计通了，
+> 自动旋转可达（缺 Android HAL）；光感仍不通，自动亮度确实做不了。
+> ★**游戏不受影响。**
 > 工具 `scripts/probe-windows-sensors.sh`，完整证据 `docs/stage4-findings.md` #37。
 >
 > **★★ Stage 6 M7/M8（2026-08-20）：温控根治 + 120 Hz + 取消刷机后脚本。**
@@ -278,9 +314,10 @@
 > `android-post-flash.sh` 里的禁用两行已删（留着会在每次重刷 userdata 后
 > 把好的蓝牙重新关掉）。
 >
-> **搁置并说明理由**：传感器（★M5 已查明**不是缺 DTS 节点，是整套跑在 SLPI
-> DSP 上、AP 无总线可达** → 主线此路不通，见 #37；连带没有自动旋转与自动亮度，
-> 但**游戏不受影响**）、
+> **搁置并说明理由**：传感器（⚠️**此处的"此路不通"已被 M9 推翻** ——
+> 整套确实跑在 SLPI DSP 上、AP 无总线可达，但经 hexagonrpcd 给 DSP 当文件
+> 服务器后**加速度计已实测通**，见 #37；光感仍不通，故自动亮度做不了，
+> 自动旋转则只差 Android HAL；**游戏不受影响**）、
 > Venus 硬解、UCSI、SELinux 转 enforcing。
 > ⚠️**记一条将来的地雷**：热管理 HAL 是 AOSP mock，它报的 skin/battery
 > **SHUTDOWN 阈值只有 36.0 °C**，而 `ThermalManagerService.shutdownIfNeeded()`
