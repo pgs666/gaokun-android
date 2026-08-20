@@ -171,6 +171,8 @@ PRODUCT_BUILD_GENERIC_OTA_PACKAGE := true
 $(call inherit-product, $(SRC_TARGET_DIR)/product/virtual_ab_ota/launch.mk)
 
 # ★ boot_control HAL —— 必须用我们自己那个，不能用 default。
+# bootctl / update_engine_client 是排查 A/B 的标准工具，默认不装，这里显式带上
+# （2026-08-20 实测：验证槽位状态时才发现两个都没有）。
 # default 只把槽位写进 misc，然后指望 bootloader 去读；systemd-boot 不认识
 # 那个结构。我们这个包住同一个 libboot_control，额外把槽位镜像进 ESP 的
 # loader.conf。完整理由见 device/huawei/gaokun3/boot_control/Android.bp。
@@ -178,7 +180,9 @@ PRODUCT_PACKAGES += \
     android.hardware.boot-service.gaokun3 \
     update_engine \
     update_engine_sideload \
-    update_verifier
+    update_verifier \
+    bootctl \
+    update_engine_client
 
 $(call inherit-product, device/huawei/gaokun3/device.mk)
 
