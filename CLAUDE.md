@@ -5,7 +5,47 @@
 在华为 MateBook E Go（Snapdragon 8cx Gen 3 / sc8280xp，代号 gaokun）上跑原生 AOSP，
 最终目标是能稳定运行 arm64 手游。
 
-**当前阶段：Stage 6 M11 — ★★Android 里直接读到加速度计与陀螺仪（Z≈9.88，accuracy=3）；只剩 AIDL HAL 没写**（每次开工时更新这一行）
+**当前阶段：Stage 6 M12 — ★★传感器整条打通：sensors HAL 已把真读数喂进 SensorService，自动旋转接上；欠轴向标定与 sepolicy**（每次开工时更新这一行）
+
+> **★★ Stage 6 M12（2026-08-20）：sensors HAL 落地，自动旋转接上。**
+>
+> ★**实机验证**（`dumpsys sensorservice`）：
+> ```
+> Active sensors: SH3001 Accelerometer (handle=0x00000001, connections=2)
+> SH3001 Accelerometer: last 50 events
+>      1 (ts=612.371743828, wall=17:42:46.858) -0.04, 0.05, 9.88,
+> ```
+> 两个消费者正是自动旋转的 `WindowOrientationListener$AccelSensorJudge`
+> 与 `FaceDownDetector`。★**框架还自动融合出 Game Rotation Vector /
+> Gravity / Linear Acceleration** —— 有 accel+gyro 就有，游戏体感由此可用。
+> - **做法是改造 AOSP 默认实现**（`hardware/interfaces/sensors/aidl/default`），
+>   不是从零写。⚠️ **必须复制而不能继承**：那个 `Sensors` 类的传感器列表在
+>   构造函数体里硬加而 `mSensors` 是 private，且 `libsensorsexampleimpl` 的
+>   `visibility` 只放行 `hardware/interfaces` 子包，设备树链不了。
+>   改动只三处：列表收敛为 accel+gyro（★那 7 个假传感器**必须删**，留着框架会
+>   以为本机有气压计/湿度计）、两个 `readEventPayload` 换成真数据（没数据时报
+>   UNRELIABLE，**不编一个 9.8 出来**）、`SensorInfo` 写真名字。
+> - ⚠️★**最贵的一个坑：HAL 自己的重试把传感器枚举弄坏了。** 初版在查不到
+>   传感器时每 10 秒**重建整个 SSC 会话**，结果之后连独立命令行客户端都报
+>   「没有传感器提供 data_type=accel」，必须重启 hexagonrpcd 才恢复。
+>   干净 A/B：停掉 HAL、重建会话，独立客户端立刻又读到 Z≈9.88。
+>   根因是每次重建都在 SSC 上留下一个**被丢弃的客户端** —— 与「使能光感会
+>   污染会话」是同一类现象。改成**在同一个 client 上重试 FindSensor**。
+> - ★**必知时序**：`registry` 服务比**物理传感器先注册**，所以 WaitForService
+>   成功后立刻查 accel 会得到「没有传感器提供」，要再等约 20 秒。
+> - ⚠️ **VINTF 清单是 servicemanager 开机时读的**：运行时把 fragment 丢进
+>   `/vendor/etc/vintf/manifest/` 它看不见，`addService` 会返回 -3 并让
+>   `CHECK_EQ` abort（症状是 HAL 静默退出、日志全空，只有 tombstone 能看出来）。
+> - ⚠️ **`adb shell stop; start` 会连带断 WiFi**（网络由框架管），
+>   adb over TCP 当场掉线，而且回来时 IP 会变。别当成机器挂了。
+> - ⬜ **欠三样**：sepolicy（现 permissive，logcat 一串 avc denied）、
+>   ★**轴向标定**（安装矩阵全零，自动旋转方向可能是反的，要对着实机转一圈定）、
+>   `CONFIG_QCOM_FASTRPC=y`（现仍 `=m`，重启后要跑
+>   `scripts/sensors-up-android.sh` 手动补）。
+> - ⚠️ 另记：**boot_control HAL 会把默认启动项改成当前槽位的 Android 条目**
+>   （M6 的设计），所以「默认永远留救援系统」这条纪律**装了 A/B 之后已不成立**
+>   —— 本轮重启就直接回到了 Android。远程救援仍可用（Android 里 adb 可达），
+>   但要恢复原纪律得动那个 HAL。
 
 > **★★ Stage 6 M11（2026-08-20）：Android 侧传感器读数打通。**
 >
