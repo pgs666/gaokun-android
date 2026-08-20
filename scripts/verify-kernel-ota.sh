@@ -55,13 +55,23 @@ ck "解包器能读 boot_a" 'header_version=2' "$(sh 'mkdir -p /data/local/tmp/b
 
 echo
 echo "══ 5. ESP 上的每槽内核（systemd-boot 实际加载的）══"
+# ⚠️ 逐个文件查，不要拿"目录列表逐字匹配"当判据 —— OTA 的 postinstall 会额外
+#   写一个 cmdline.txt（解包器的产物，是预期行为），2026-08-20 就因此误报过一次 ✗。
+#   判据要针对"必需的东西在不在"，不要对"多了什么"敏感。
 esp=$(sh 'M=/data/local/tmp/espv; mkdir -p $M; mountpoint -q $M || mount -t vfat -o ro /dev/block/by-name/esp $M
 MID=$(ls $M | grep -E "^[0-9a-f]{32}$" | head -1)
-for s in a b; do echo -n "slot_$s:$(ls $M/$MID/android/slot_$s 2>/dev/null | tr "\n" "," ) "; done
+for s in a b; do
+  miss=""
+  for f in Image gaokun3.dtb ramdisk.img; do
+    [ -s "$M/$MID/android/slot_$s/$f" ] || miss="$miss $f"
+  done
+  [ -z "$miss" ] && echo -n "slot_$s=ok " || echo -n "slot_$s=missing:$miss "
+  [ -s "$M/$MID/android/slot_$s/recovery-ramdisk.img" ] && echo -n "(recovery) "
+done
 umount $M')
 echo "  $esp"
-ck "slot_a 三个文件齐" 'slot_a:Image,gaokun3\.dtb,ramdisk\.img,' "$esp"
-ck "slot_b 三个文件齐" 'slot_b:Image,gaokun3\.dtb,ramdisk\.img,' "$esp"
+ck "slot_a 三个必需文件齐" 'slot_a=ok' "$esp"
+ck "slot_b 三个必需文件齐" 'slot_b=ok' "$esp"
 
 echo
 echo "══ 6. 传感器（内核 =y 之后应当开机自起）══"
