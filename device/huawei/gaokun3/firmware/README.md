@@ -35,6 +35,43 @@ cp -r /tmp/fw/firmware/* device/huawei/gaokun3/firmware/
 `/lib/firmware/qcom/sc8280xp/HUAWEI/gaokun3/` 直接拷，
 或从 Windows 驱动包（`uup-drivers-sc8280xp`）提取。**不可公开再分发。**
 
+## ★ 已验证的第三种来源：uup-drivers-sc8280xp 的 release（不需要 Windows 分区）
+
+2026-08-20 实测通过。**这条路不需要机器上还留着 Windows**，全部来自公开源
+（该项目用 forked UUPMediaCreator 从 Windows Update 抓驱动）：
+
+```bash
+# 185 MB，最新 tag
+curl -LO https://github.com/matebook-e-go/uup-drivers-sc8280xp/releases/download/200.0.10.0/200.0.10.0.zip
+unzip -o 200.0.10.0.zip 'qc*.cab'
+# .cab 用 cabextract（Linux）或 Windows 自带 expand.exe -F:* x.cab 目标目录
+```
+
+| 需要的东西 | 在哪个 cab |
+|---|---|
+| `qcslpi8280.mbn`、**`RSCS.bin`**（SLPI 伴生固件） | `qcsubsys_ext_scss8280.cab` |
+| `qcadsp8280.mbn`、`RADS.bin` | `qcsubsys_ext_adsp8280.cab` |
+| `qccdsp8280.mbn`、`RCDS.bin` | `qcsubsys_ext_cdsp8280.cab` |
+| 传感器全套 JSON、**`sns_reg_config`（407 B 文本格式）**、socinfo 原件 | `qcSensorsConfigQrd8280.cab` |
+
+★ **SCSS = Sensor Core SubSystem** —— 这就是为什么 SLPI 的东西在 `scss` 包里。
+命名自成体系：ADSP→`RADS.bin`、CDSP→`RCDS.bin`、SLPI→`RSCS.bin`。
+
+★ **交叉校验（做过，值得一直做）**：cab 里的 `qcslpi8280.mbn` 与本仓在用的那份
+**sha256 逐字节相同**（`9c1ce6f5…`）—— 证明这个来源与本机固件同出一脉，
+不是随便找来的另一个版本。
+
+⚠️ 两个会把人绕进去的坑：
+* **`.cab` 解包失败时会静默产出 0 个文件**。我一度把"0 个文件"当成"包里没有
+  这个东西"，其实是传给 `expand.exe` 的路径末尾带了 ``
+  （Python 用 `open(...,'w')` 写清单时把 `
+` 翻成了 `
+`）。
+  **判据要看解出的文件数，而不是 find 的结果为空。**
+* NTFS 上直接看 DriverStore 时，`8280_qrd_*.json` 是**重解析点**
+  （ntfs-3g 显示为 34 字节的 symlink，读会 FileNotFoundError）；
+  cab 里是真文件（如 `8280_qrd_sh3001_0.json` 6189 B）。
+
 ## 放置规则
 
 保持本目录下相同的子路径结构（cmdline 里 `firmware_class.path=/vendor/firmware/`）。

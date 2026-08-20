@@ -508,12 +508,34 @@ ntfs-3g 显示为 `-> unsupported reparse tag 0x80000017`、`stat` 只有 34 字
 | SLPI remoteproc running | ✅ 一直是 |
 | QRTR（`/dev/qrtr-tun`） | ✅ 一直是 |
 | **`/dev/fastrpc-sdsp`** | ✅ **已打通**，靠 `insmod fastrpc.ko`；正解是 `CONFIG_QCOM_FASTRPC=y` |
-| Windows DriverStore 的传感器文件 | ❌ **当前的硬阻塞** —— 见下 |
+| Windows DriverStore 的传感器文件 | ✅ **已解决**（2026-08-20）—— 从 `uup-drivers-sc8280xp` 的 release 提取，不需要 Windows 分区，见下 |
 | `hexagonrpcd`（给 DSP 当文件服务器） | ⬜ 需编译，且要打一个补丁 |
 | `libssc` + `ssccli`（读数） | ⬜ 需编译 |
 | **Android 侧 sensors HAL** | ⬜ 尚不存在，是独立的一大块 |
 
-#### ⚠️ 硬阻塞：Windows 分区已被抹掉
+#### ✅ 原先的硬阻塞已解除：文件从公开源拿到了
+
+**本机的 Windows 已在 2026-08-20 抹除**，我当时读过那些 JSON 但没拷出来。
+但不需要它了 —— 全部文件都在 **`matebook-e-go/uup-drivers-sc8280xp`
+的 release** 里（该项目用 forked UUPMediaCreator 从 Windows Update 抓驱动）：
+
+| 需要的 | 出自 |
+|---|---|
+| 传感器全套 JSON、`sns_reg_config`（**407 B 文本格式**，与指南要求一致）、socinfo 原件 | `qcSensorsConfigQrd8280.cab` |
+| **`RSCS.bin`**（1340 B）与 `qcslpi8280.mbn` | `qcsubsys_ext_scss8280.cab`（SCSS = Sensor Core SubSystem） |
+
+★ **交叉校验通过**：cab 里的 `qcslpi8280.mbn` 与本仓在用的那份 sha256
+**逐字节相同**（`9c1ce6f5…`），证明来源同出一脉。
+★ **socinfo 原件的内容与指南要求逐字一致**：`QRD` / `Unknown` / `0` /
+`65536` / `3.1`（`soc_id` 文件 cab 里没有，指南给 `449`，而这与
+`tcs3701.json` 里的 `"soc_id": ["449"]` 一致）。
+★ `sns_reg_config` 开头确实是 `version=1` + `file=hw_platform=/sys/devices/soc0/hw_platform`
+—— 这也解释了**为什么必须有 hexagonrpcd 提供 VFS**：DSP 要按这些路径去读。
+
+提取步骤与两个会绕人的坑（cab 静默解包失败、NTFS 上 JSON 是重解析点）
+记在 `device/huawei/gaokun3/firmware/README.md`。
+
+#### （历史）原先的阻塞描述
 
 贡献者的 Phase 4 / Phase 10 需要从 Windows DriverStore 取三类文件：
 
@@ -530,10 +552,13 @@ ntfs-3g 显示为 `-> unsupported reparse tag 0x80000017`、`stat` 只有 34 字
 
 #### 两个已知的坑（贡献者踩出来的，转录以免重犯）
 
-1. **DSP 固件请求的路径带尾随 ``**（它是在 Windows 上编译的）。两处要分别处理：
-   * socinfo 走真实文件系统 → 建 `名字` 的 symlink 即可；
+1. **DSP 固件请求的路径带尾随 `
+`**（它是在 Windows 上编译的）。两处要分别处理：
+   * socinfo 走真实文件系统 → 建 `名字
+` 的 symlink 即可；
    * registry 走 hexagonfs 的**内部 VFS**、不经过内核 symlink 解析
-     → **必须改 `hexagonrpcd/hexagonfs.c`**，在每段路径末尾截掉 ``。
+     → **必须改 `hexagonrpcd/hexagonfs.c`**，在每段路径末尾截掉 `
+`。
      apt 里的现成版本不带这个补丁，所以必须自己编。
 2. **`hexagonrpcd` 的 shell wrapper 不认识 sc8280xp**，会 fallback 到错误的
    DSP；必须直接调二进制并显式给 `-f /dev/fastrpc-sdsp -d sdsp -s -R <VFS 根>`。
