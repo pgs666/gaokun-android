@@ -46,7 +46,16 @@ MODE=${1:-all}
 # U 盘上那套老条目（$MID-crdroid.conf 等）还在，但删掉 Windows 分区之后固件
 # 改为优先内置 ESP，所以跑这个脚本的救援系统 /boot/efi = 内置 ESP。
 # 要针对 U 盘那套操作就显式传 ENTRY=$MID-crdroid.conf。
-ENTRY=${ENTRY:-$MID-int-crdroid.conf}
+#
+# ⚠️★ 2026-08-20 改默认为 android-a.conf，**int-crdroid.conf 已不可用**：
+#   A/B 化之后 fstab.gaokun3 的四条 logical 行都带了 slotselect，于是
+#   first-stage mount 必须靠 cmdline 的 androidboot.slot_suffix 才能把
+#   "system" 解析成 "system_a"。两个条目的 kernel/dtb/initrd 完全相同，
+#   唯一差别就是 android-a.conf 带 slot_suffix=_a 而 int-crdroid.conf 没有。
+#   少了它就是 M6 那个坑：init 主动 reboot() 而非 panic → pstore 全空、
+#   屏幕一闪而过，**唯一症状是"进 Android 就重启"**（见 CLAUDE.md M6）。
+#   要切另一个槽就传 ENTRY=$MID-android-b.conf。
+ENTRY=${ENTRY:-$MID-android-a.conf}
 
 pull() {  # pull <远端文件> <本地目标>
   echo "拉取 $(basename "$1") …"

@@ -43,14 +43,17 @@
                                     -R /vendor/etc/hexagonrpcd-root）
         include/Android.bp          cc_library_headers "hexagonrpc_headers"
 
-    ⚠️ 两个必须自己补的集成点：
-      1. hexagonrpc_defaults 里 header_libs 了 "device_kernel_headers" —— 那是
-         约定由设备树提供的名字，树里没人定义。我们建了个空壳：
-         device/huawei/gaokun3/kernel-headers/Android.bp。
-         （不需要真提供内容：hexagonrpc 用到的 6 个 fastrpc ioctl 与 5 个 uapi
-         struct，bionic 的 uapi/misc/fastrpc.h 里全有，2026-08-20 逐符号比对过。）
-      2. 上游【没有】CR 截断补丁，缺了 DSP 读不到传感器注册表 →
-         由 scripts/crdroid-tree-fixes.py 打（幂等）。
+    ⚠️ 必须自己补的集成点只有一个：上游【没有】CR 截断补丁，缺了 DSP 读不到
+    传感器注册表 → 由 scripts/crdroid-tree-fixes.py 打（幂等）。
+
+    ★ hexagonrpc_defaults 里 header_libs 的 "device_kernel_headers" 【不用管】：
+      AOSP 自己就在 build/soong/Android.bp:56 用 kernel_headers 模块类型定义了它
+      （vendor: true, visibility public）。
+      ⚠️ 我一度以为"树里没人定义"而建了个空壳，结果构建直接报
+      `module "device_kernel_headers" already defined` ——
+      因为我当时只 grep 了 device/ 目录。**判断"树里有没有这个模块"要 grep 全树。**
+      顺带记一条：hexagonrpc 用到的 6 个 fastrpc ioctl（含 INIT_ATTACH_SNS）
+      与 5 个 uapi struct，bionic 的 uapi/misc/fastrpc.h 里本来就全有。
 
     revision 钉在实测通过的这个 commit（2026-08-13 "bump to version 0.5.0"）。
     上游若改动 copy_segment_and_advance()，tree-fixes 脚本会报"找不到锚点"

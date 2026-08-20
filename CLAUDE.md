@@ -266,7 +266,7 @@
 >   而它的默认项当时是 Android → **自动回落安全网悄悄断了**，
 >   症状只是"莫名其妙进了 Android"。动过分区表就要重读这个变量确认。
 > - **现役闭环（两个方向都实测通过）**：默认 → 内置救援 Ubuntu；
->   `sudo bootctl set-oneshot <mid>-int-crdroid.conf` → Android；
+>   `sudo bootctl set-oneshot <mid>-android-a.conf` → Android；
 >   Android 里 `adb reboot` → 自动回落救援系统。
 >   ⚠️ 条目名带 **`int-`** 前缀，U 盘那套旧名（`<mid>-crdroid.conf`）已非现役。
 >

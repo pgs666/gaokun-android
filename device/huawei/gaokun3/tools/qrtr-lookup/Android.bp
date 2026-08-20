@@ -1,0 +1,13 @@
+// QRTR 服务列举工具。AOSP 里没有任何 QRTR 用户态工具，而"SSC 起来了没有"
+// 的唯一判据就是服务 400 在不在 —— 所以这个 20 KB 的小东西是必需的诊断手段。
+// 随镜像发布（进 PRODUCT_PACKAGES）：帮忙测传感器的人不该为了一个诊断工具
+// 去搭一整套 AOSP 构建环境。
+cc_binary {
+    name: "gaokun3-qrtr-lookup",
+    srcs: ["qrtr_lookup.c"],
+    vendor: true,
+    cflags: [
+        "-Wall",
+        "-Werror",
+    ],
+}

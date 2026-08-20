@@ -430,6 +430,12 @@ PRODUCT_PACKAGES += \
     hexagonrpcd \
     hexagonrpcd-sdsp.rc
 
+# QRTR 服务列举工具（自研，tools/qrtr-lookup/）。AOSP 里没有任何 QRTR 用户态
+# 工具，而"SLPI 上的 SSC 起来了没有"唯一的判据就是服务 400 在不在。
+# 随镜像发布：帮忙测传感器的人不该为一个 20 KB 诊断工具去搭 AOSP 构建环境。
+PRODUCT_PACKAGES += \
+    gaokun3-qrtr-lookup
+
 # VFS 根 → /vendor/etc/hexagonrpcd-root/（路径由上游 rc 的 -R 决定，别改名）
 # ★ 空 registry 是整套的关键：DSP 找不到覆盖值就用默认值（=全部传感器启用）。
 #   它 0 字节且专有目录被 gitignore，所以单独放在 etc/ 受版本控制，
