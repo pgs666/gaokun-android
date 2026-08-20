@@ -1,0 +1,30 @@
+{
+    "response": [
+        {
+            "maintainer": "vahiru",
+            "oem": "Huawei",
+            "device": "gaokun3",
+            "filename": "crDroidAndroid-16.0-20260820-gaokun3-v12.11.zip",
+            "download": "https://github.com/vahiru/gaokun-android/releases/download/v0.1.0-alpha/crDroidAndroid-16.0-20260820-gaokun3-v12.11.zip",
+            "timestamp": 1787184787,
+            "md5": "ea0b58e6911b876417ed9959530a300d",
+            "sha256": "3bb466fd01c41da2ce457baf27c2c3707e50874564ef0321deb65e5efb0d4416",
+            "size": 1061087197,
+            "version": "12.11",
+            "os_patch_level": "2026-08-01",
+            "os_sdk_level": 36,
+            "buildtype": "UNOFFICIAL",
+            "forum": "https://github.com/vahiru/gaokun-android",
+            "gapps": "",
+            "firmware": "",
+            "modem": "",
+            "bootloader": "",
+            "recovery": "",
+            "paypal": "",
+            "telegram": "",
+            "dt": "https://github.com/vahiru/gaokun-android/tree/main/device/huawei/gaokun3",
+            "common-dt": "",
+            "kernel": "https://github.com/KawaiiHachimi/linux-gaokun-buildbot"
+        }
+    ]
+}
