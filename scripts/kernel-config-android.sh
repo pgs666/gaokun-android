@@ -159,8 +159,20 @@ OUT="${1:?用法: $0 <kernel-out-dir>}"
 #   （6.12+ 也可用 RT_GROUP_SCHED_DEFAULT_DISABLED，但直接关更干净。）
 ./scripts/config --file "$OUT/.config" --disable RT_GROUP_SCHED
 
+# ─── Stage 6: 传感器（第 13 次踩 =m 坑）───
+# ★ CONFIG_QCOM_FASTRPC 在 buildbot defconfig 里是 =m，而 Android 不加载模块
+#   → /dev/fastrpc-* 四个节点【一个都不出现】→ hexagonrpcd 起不来 → 没有传感器。
+#   DTS 里节点本来是齐的（remoteproc_slpi 下 fastrpc + compute-cb@1/2/3），
+#   rpmsg 通道也在，只是没人 probe。
+#   实测佐证：单独编出 fastrpc.ko 推到设备上 insmod（vermagic 匹配、模块签名关闭），
+#   /dev/fastrpc-{sdsp,adsp,cdsp,cdsp-secure} 立刻全部出现。
+#   ⚠️ 那只是【验证手段】，不是解法 —— 正解就是这里的 =y。
+#   我们只用 sdsp（SLPI）；权限在 ueventd.gaokun3.rc 里给。
+#   整条通路与实测读数（Z≈9.87）见 docs/stage4-findings.md #37。
+./scripts/config --file "$OUT/.config" --enable QCOM_FASTRPC
+
 # ─── olddefconfig + 断言（止损"=m 坑"）───
-# 这个坑已经踩了 12 次：`scripts/config --enable X` 写进去了，olddefconfig
+# 这个坑已经踩了 13 次：`scripts/config --enable X` 写进去了，olddefconfig
 # 却可能因为依赖把它降回 =m（或压根没有该符号），而 Android **不加载任何模块**
 # （/vendor/lib/modules 不存在、lsmod 为空），于是驱动静默缺席。
 # 所以：olddefconfig 由脚本自己跑（顺手把 ARCH=arm64 这个致命参数固定住），
@@ -176,7 +188,7 @@ PINCTRL_LPASS_LPI PINCTRL_SC8280XP_LPASS_LPI SC_LPASSCC_8280XP
 SND_SOC_SC8280XP SND_SOC_WSA883X SND_SOC_WCD938X SOUNDWIRE_QCOM
 SND_SOC_LPASS_RX_MACRO SND_SOC_LPASS_TX_MACRO SND_SOC_LPASS_VA_MACRO
 SND_SOC_LPASS_WSA_MACRO SND_SOC_QDSP6 QCOM_PD_MAPPER
-FUSE_FS IIO QCOM_SPMI_ADC5
+FUSE_FS IIO QCOM_SPMI_ADC5 QCOM_FASTRPC
 "
 bad=0
 for s in $MUST_Y; do

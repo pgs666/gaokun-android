@@ -40,3 +40,15 @@ device/huawei/gaokun3/firmware/**
 # 开发机的 adb 公钥（PRODUCT_ADB_KEYS）。个人密钥，公开仓库不放。
 # 换机器时：cp ~/.android/adbkey.pub device/huawei/gaokun3/adb_keys
 device/huawei/gaokun3/adb_keys
+
+# 传感器 VFS 根（hexagonrpcd 喂给 SLPI DSP 的文件）——高通/华为专有，不入版本库。
+#   sensors/config/*.json   SEE 传感器驱动配置
+#   sensors/sns_reg.conf    DSP 注册表索引（★必须是文本格式，约 400 B）
+#   dsp/sdsp/RSCS.bin       SLPI 伴生固件
+#   socinfo/*               平台标识（内容本身不敏感，但同源一并管理）
+# 获取方法见 device/huawei/gaokun3/hexagonrpcd-root/README.md
+# ⚠️ 同 firmware/ 一样【整目录忽略 + 只放行 README.md】，不按扩展名白名单列。
+#    注意那个【空 registry 文件】不在这里 —— 它 0 字节又是整套的关键，
+#    放在 etc/hexagonrpcd-empty-registry 受版本控制，免得别人克隆后忘了建。
+device/huawei/gaokun3/hexagonrpcd-root/**
+!device/huawei/gaokun3/hexagonrpcd-root/README.md

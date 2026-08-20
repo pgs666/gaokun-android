@@ -401,3 +401,47 @@ PRODUCT_PACKAGES += \
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/bin/bpf-relabel.sh:$(TARGET_COPY_OUT_VENDOR)/bin/bpf-relabel.sh \
     $(LOCAL_PATH)/etc/bpfrelabel.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/bpfrelabel.rc
+
+# ─── 传感器：hexagonrpcd 给 SLPI 上的 DSP 当只读文件服务器 ───
+#
+# 本机没有任何 AP 侧传感器芯片驱动，整套传感器（sh3001 IMU / tcs3701 光感 /
+# 铰链角 …）跑在 SLPI DSP 上，AP 够不着那些总线。可行的通路是反过来：
+# AP 通过 FastRPC 把一组配置文件【服务给 DSP 读】，DSP 起 SSC，
+# 再由 QRTR 上的 QMI 服务 400 把读数送回来。
+#
+# 已在救援 Linux 上实测通过：静止时加速度计 Z≈9.87 m/s²，15 秒 131 行读数。
+# 完整案卷 docs/stage4-findings.md #37，Linux 侧一键复现 scripts/slpi-sensors-setup.sh。
+#
+# ★ hexagonrpcd 上游自带 Android.bp 与 hexagonrpcd-sdsp.rc（cc_binary + vendor:true，
+#   service 跑在 system:system，-R /vendor/etc/hexagonrpcd-root）——所以这里
+#   只需要把包加进来 + 把 VFS 根装到那个路径。
+#   项目由 manifests/local_manifest_gaokun3.xml 拉取；
+#   \r 截断补丁由 scripts/crdroid-tree-fixes.py 打（上游没有，缺了 DSP 读不到 registry）。
+# ⚠️ 前提是 CONFIG_QCOM_FASTRPC=y（buildbot 默认 =m，而 Android 不加载模块）
+#   —— 已在 scripts/kernel-config-android.sh 里 enable + 断言。
+# ⚠️ /dev/fastrpc-sdsp 的权限在 ueventd.gaokun3.rc 里给（默认 root 独占）。
+#
+# ⬜ 还缺 Android 侧的 sensors HAL（AIDL android.hardware.sensors）——
+#   libssc 依赖 glib/gobject/libqmi 那一套，搬不进 Android，得照它的协议逻辑
+#   重写（QRTR 上的极简 QMI 客户端 + 那 8 个 .proto）。所以装了本段之后
+#   SensorService 仍然看不到传感器；本段的验收判据是 **Android 里出现
+#   QRTR 服务 400**，证明 DSP 侧 SSC 已经跑起来。
+PRODUCT_PACKAGES += \
+    hexagonrpcd \
+    hexagonrpcd-sdsp.rc
+
+# VFS 根 → /vendor/etc/hexagonrpcd-root/（路径由上游 rc 的 -R 决定，别改名）
+# ★ 空 registry 是整套的关键：DSP 找不到覆盖值就用默认值（=全部传感器启用）。
+#   它 0 字节且专有目录被 gitignore，所以单独放在 etc/ 受版本控制，
+#   免得别人克隆后忘了建而"传感器静默失效"。
+#   ⚠️ 别用 sscregistrygen 预生成——实测会把加速度计一起弄坏（#37）。
+PRODUCT_COPY_FILES += \
+    $(LOCAL_PATH)/etc/hexagonrpcd-empty-registry:$(TARGET_COPY_OUT_VENDOR)/etc/hexagonrpcd-root/sensors/registry/registry \
+    $(LOCAL_PATH)/hexagonrpcd-root/sensors/sns_reg.conf:$(TARGET_COPY_OUT_VENDOR)/etc/hexagonrpcd-root/sensors/sns_reg.conf \
+    $(LOCAL_PATH)/hexagonrpcd-root/dsp/sdsp/RSCS.bin:$(TARGET_COPY_OUT_VENDOR)/etc/hexagonrpcd-root/dsp/sdsp/RSCS.bin
+
+# 26 个传感器 JSON 与 6 个 socinfo 文件按原相对路径批量装入
+PRODUCT_COPY_FILES += $(foreach f,$(wildcard $(LOCAL_PATH)/hexagonrpcd-root/sensors/config/*.json),\
+    $(f):$(TARGET_COPY_OUT_VENDOR)/etc/hexagonrpcd-root/sensors/config/$(notdir $(f)))
+PRODUCT_COPY_FILES += $(foreach f,$(wildcard $(LOCAL_PATH)/hexagonrpcd-root/socinfo/*),\
+    $(f):$(TARGET_COPY_OUT_VENDOR)/etc/hexagonrpcd-root/socinfo/$(notdir $(f)))
