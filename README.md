@@ -192,9 +192,13 @@ Concrete, well-scoped work, roughly easiest first:
    `libssc` ([`scripts/slpi-sensors-setup.sh`](scripts/slpi-sensors-setup.sh)
    reproduces it end to end). As far as we know no other SC8280XP device has
    this working, the ThinkPad X13s included. What is missing is the **Android**
-   side: port `hexagonrpcd` (plain C — fastrpc ioctl plus a small read-only
-   VFS) and write an AIDL `android.hardware.sensors` HAL around libssc. That
-   one piece of work is what stands between this port and auto-rotate.
+   side. `hexagonrpcd` is **already building and running under Android**, and
+   the SSC service is live on QRTR — what is left is a QMI/protobuf client and
+   an AIDL `android.hardware.sensors` HAL around it. libssc itself cannot be
+   ported (it pulls in glib/gobject/libqmi), so the protocol has to be
+   reimplemented — and it is written down for you, byte layouts and message IDs
+   included, in [`docs/sensors-ssc-protocol.md`](docs/sensors-ssc-protocol.md).
+   That one piece of work is what stands between this port and auto-rotate.
 7. **Camera.** Untouched.
 
 If you have a MateBook E Go and want to test, open an issue — reports of what

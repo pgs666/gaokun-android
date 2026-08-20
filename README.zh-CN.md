@@ -175,9 +175,13 @@ Android 相关的配置断言在
    正确读数（`hexagonrpcd` + `libssc`，
    [`scripts/slpi-sensors-setup.sh`](scripts/slpi-sensors-setup.sh) 能一键复现）。
    据我们所知，**其他 SC8280XP 设备都没有跑通过这一套**，ThinkPad X13s 也没有。
-   缺的是 **Android 侧**：把 `hexagonrpcd` 移过去（纯 C，fastrpc ioctl
-   加一个小的只读 VFS），再拿 libssc 包一个 AIDL
-   `android.hardware.sensors` HAL。**就靠这一块活，自动旋转就能落地。**
+   缺的是 **Android 侧**。`hexagonrpcd` **已经能在 Android 上构建并运行**，
+   SSC 服务也已在 QRTR 上就绪 —— 剩下的是一个 QMI/protobuf 客户端，
+   再包成 AIDL `android.hardware.sensors` HAL。libssc 本身搬不过来
+   （它拖着 glib/gobject/libqmi），所以协议要重写 —— 而**协议已经替你写清楚了**，
+   连字节布局和消息 ID 都有：
+   [`docs/sensors-ssc-protocol.md`](docs/sensors-ssc-protocol.md)。
+   **就靠这一块活，自动旋转就能落地。**
 7. **摄像头。** 完全没碰。
 
 如果你手上有 MateBook E Go 想帮忙测，欢迎开 issue —— **报告哪里坏了和交补丁
