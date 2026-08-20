@@ -122,21 +122,66 @@ if [[ ! -s "$RAMDISK" ]]; then
 fi
 echo "cmdline: $(cat "$CMDLINE")"
 
-# ── 用 mkbootimg 打包新 boot.img ────────────────────────────────────────────
+# ── 打包新 boot.img（不依赖 mkbootimg，直接复写原 header）─────────────────────
 BOOT_NEW="$WORK/boot-new-a.img"
 echo "== 打包新 boot.img =="
-if ! command -v mkbootimg &>/dev/null; then
-    echo "错误: 找不到 mkbootimg。请安装 android-sdk-libsparse-utils 或从 AOSP 编译。" >&2
-    exit 1
-fi
 
-mkbootimg \
-    --header_version 2 \
-    --kernel "$VMLINUZ" \
-    --ramdisk "$RAMDISK" \
-    --dtb "$DTB" \
-    --cmdline "$(cat "$CMDLINE")" \
-    --output "$BOOT_NEW"
+python3 - "$BOOT_A" "$VMLINUZ" "$RAMDISK" "$DTB" "$BOOT_NEW" <<'PYEOF'
+import struct, sys, os
+
+def align(x, page):
+    return (x + page - 1) // page * page
+
+src_img, kernel_path, ramdisk_path, dtb_path, out_path = sys.argv[1:6]
+
+with open(src_img, "rb") as f:
+    hdr = bytearray(f.read(1664))
+if hdr[:8] != b"ANDROID!":
+    sys.exit("源 boot.img magic 错误")
+
+u32 = lambda off: struct.unpack_from("<I", hdr, off)[0]
+page = u32(36)
+ver = u32(40)
+if ver != 2:
+    sys.exit(f"仅支持 header v2，当前 {ver}")
+
+with open(kernel_path, "rb") as f:
+    kernel = f.read()
+with open(ramdisk_path, "rb") as f:
+    ramdisk = f.read()
+with open(dtb_path, "rb") as f:
+    dtb = f.read()
+
+# 更新 header 中的大小字段
+struct.pack_into("<I", hdr, 8, len(kernel))
+struct.pack_into("<I", hdr, 16, len(ramdisk))
+struct.pack_into("<I", hdr, 24, 0)          # second_size
+struct.pack_into("<I", hdr, 1632, 0)       # recovery_dtbo_size
+struct.pack_into("<I", hdr, 1648, len(dtb))
+struct.pack_into("<I", hdr, 1644, 1660)   # header_size for v2
+
+# 清零 id 字段（hash 不再匹配原镜像，对 UEFI 启动无影响）
+hdr[576:608] = b'\x00' * 32
+
+with open(out_path, "wb") as out:
+    out.write(hdr)
+    # kernel
+    out.write(kernel)
+    out.write(b'\x00' * (align(len(kernel), page) - len(kernel)))
+    # ramdisk
+    out.write(ramdisk)
+    out.write(b'\x00' * (align(len(ramdisk), page) - len(ramdisk)))
+    # second (0)
+    # recovery_dtbo (0)
+    # dtb
+    out.write(dtb)
+    out.write(b'\x00' * (align(len(dtb), page) - len(dtb)))
+
+print(f"新 boot.img 已写入: {out_path}")
+print(f"  kernel: {len(kernel)} bytes")
+print(f"  ramdisk: {len(ramdisk)} bytes")
+print(f"  dtb: {len(dtb)} bytes")
+PYEOF
 
 echo "新 boot.img: $BOOT_NEW ($(stat -c%s "$BOOT_NEW") bytes)"
 
