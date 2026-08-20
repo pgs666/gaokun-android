@@ -24,6 +24,25 @@
   targetName are already correct and we only add resources to it.
 -->
 <resources>
+    <!--
+      ★ <add-resource> 是必需的，不是可选装饰。
+      DEVICE_PACKAGE_OVERLAYS 是【构建期】overlay：它只能覆盖目标模块资源表里
+      【已经存在】的条目。crDroid 那个 NetworkStackOverlay 自己只定义了
+      config_dhcp_client_hostname，所以直接写这两个 string 会被 aapt2 顶回来：
+          error: resource string/config_captive_portal_http_url
+                 does not override an existing resource.
+          note: define an <add-resource> tag (or the auto-add-overlay flag).
+      加上 add-resource 之后，这两条就成为该 RRO 自己的资源；RRO 在运行时按
+      【资源名】映射到目标包，于是覆盖掉 NetworkStack 的同名条目。
+
+      目标那边确实有这两个资源：NetworkStack res/values/config.xml:41 把
+      config_captive_portal_http_url 定义成【空字符串】，
+      NetworkMonitor.java:2671-2674 的逻辑是 config_* 非空就用它、
+      否则回落 default_*。所以填上非空值就生效。
+    -->
+    <add-resource type="string" name="config_captive_portal_http_url" />
+    <add-resource type="string" name="config_captive_portal_https_url" />
+
     <string name="config_captive_portal_https_url" translatable="false">https://connect.rom.miui.com/generate_204</string>
     <string name="config_captive_portal_http_url" translatable="false">http://connect.rom.miui.com/generate_204</string>
 </resources>
