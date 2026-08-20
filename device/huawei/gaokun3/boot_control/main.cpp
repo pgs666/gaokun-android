@@ -19,8 +19,6 @@
 using aidl::android::hardware::boot::BootControl;
 using aidl::android::hardware::boot::IBootControl;
 
-namespace {
-
 // ★ 历史记录：这里曾有一个 EnsureSlotProbeHints()，把
 //   /dev/block/by-name/boot_a 与 boot_b symlink 到 /dev/null。
 //
@@ -40,10 +38,6 @@ namespace {
 //
 //   下面 main() 里那句"槽位数必须是 2"的断言保留着，它现在校验的是
 //   真实分区被正确探测到。
-    }
-}
-
-}  // namespace
 
 int main(int, char* argv[]) {
     android::base::InitLogging(argv, android::base::KernelLogger);
@@ -54,9 +48,10 @@ int main(int, char* argv[]) {
     int32_t slots = 0;
     if (service->getNumberSlots(&slots).isOk() && slots != 2) {
         LOG(ERROR) << "boot control reports " << slots << " slots, expected 2. "
-                   << "The bootloader_control block in misc was written before the probe hints "
-                   << "existed; zero the first 4 KiB of /dev/block/by-name/misc and reboot to "
-                   << "let it re-initialise.";
+                   << "libboot_control counts slots by stat()ing boot_a..boot_d next to misc, "
+                   << "so this means boot_a/boot_b are missing or the bootloader_control block in "
+                   << "misc is stale; zero the first 4 KiB of /dev/block/by-name/misc and reboot "
+                   << "to let it re-initialise.";
     }
 
     const std::string instance = std::string(BootControl::descriptor) + "/default";

@@ -22,21 +22,40 @@
 少了哪个服务就指向哪个 DSP。⚠️ 别把 `Handover signaled` 当崩溃证据，
 那是良性噪声（#37 已用对照实验证明）。
 
-### A2. 硬件视频解码（Venus）
-现在 66 个解码器全是软解，4K 会吃力。
-`refs/linux-gaokun/patch sets/media/` 里有 8 个补丁，**buildbot 没有应用**
-（它 am 的 `patches/media/` 是 hi846 相机，不是 Venus）。
+### A2. 硬件视频解码（Venus）— 内核这一半 ✅ 已通，Android 侧待做
+详见 [#41](stage4-findings.md)。实机验证：`/dev/video0` = `qcom-venus-decoder`、
+`/dev/video1` = `qcom-venus-encoder`，`aa00000.video-codec` 绑上 `qcom-venus`，
+`abf0000.clock-controller` 绑上 `sm8350-videocc`，延迟 probe 队列空，
+固件加载失败 0 行。★固件不用找 —— `qcvss8280.mbn` 我们一直在装，
+只是当初被标成"语音服务"（**VSS = Video SubSystem**）。
 
-**第一步**：把那 8 个 `git am` 进内核树编一次，看 `/dev/video*` 出不出来。
-纯内核侧，不动 ROM。
+打了 8 个补丁里的 7 个（0014 是纯格式清理且主线已分叉，跳过）。
+两个非直觉的坑：**必须关 `CONFIG_VIDEO_QCOM_IRIS`**（否则 venus 编不过，
+报错却指向 core.c 像补丁打错），以及整条媒体链上**五个 `=m`** 要拉成 `=y`。
 
-### A3. 自动亮度（环境光）
-`tcs3701` 硬件在（I2C bus 5 / 0x39），但使能后从不返回读数，**而且会污染整个
-SSC 会话** —— 之后连加速度计也读不到，必须重启 `hexagonrpcd`（[#37](stage4-findings.md)）。
+**剩下的一半**：Android 需要一个跟 V4L2 说话的 Codec2 组件，现有 66 个解码器
+仍全是软解。★ **`external/v4l2_codec2` 本来就在 crDroid 的 manifest 里**
+（`LineageOS/android_external_v4l2_codec2`），不必新增仓库。
 
-**第一步**：从 `tcs3701.json` 读出它的 `vddio_rail` 与 `dri_irq_num`，
-确认 SSC 侧那条电源/中断在主线下是否真的可用。这是"DSP 侧驱动起不来"
-还是"我们缺了什么"的分水岭。
+**第一步**：把 `external/v4l2_codec2` 加进 `PRODUCT_PACKAGES`
+（`android.hardware.media.c2@1.0-service-v4l2` 或其 AIDL 对应物），
+写 `media_codecs_v4l2.xml` 并挂到 `ro.media.xml_variant.*`，
+再看 `dumpsys media.player` 里有没有出现 `c2.v4l2.*` 组件。
+⚠️ 别忘了 #36 那条：`media.c2.hal.selection` 必须是 `aidl`。
+
+### A3. 自动亮度（环境光）— 已收敛到一处嫌疑
+详见 [#43](stage4-findings.md)。把两份出厂配置逐字段对照之后：
+
+* ❌ **"DSP 够不到 PMIC 电源轨"排除** —— 能用的加速度计走的是**同一条**
+  `/pmic/client/sensor_vddio`。
+* ❌ **"SLPI 用不了主 SoC 的 TLMM 脚做中断"也站不住** —— 加速度计同样
+  `irq_is_chip_pin=1`。
+* ★ **嫌疑收敛到 SLPI 侧 I2C 实例号：能用的是 `bus_instance=1`，
+  光感是 `bus_instance=5`**（其次 `rail_on_state` 1 vs 2）。
+  而且它正好解释"污染整个 SSC 会话"：往没起来的 I2C 控制器发事务会在 SEE 里挂住。
+
+**第一步**：找 SLPI 侧 I2C 实例号 → 实际 QUP 控制器的映射，
+再比对 AP 的 DTS 里哪些 i2c 节点是开着的，看是不是 AP 把 instance 5 占了。
 
 ### A4. 耳机口不出声 ✅ 已修，待用户插一次耳机验收
 详见 [#40](stage4-findings.md)。**三个阻塞点，全部定位并修复**，内核侧一点没缺。
@@ -172,6 +191,21 @@ range in the curve:`（后面是空的，连哪条曲线都没说）。
 3. 构建机用完立刻 `az vm deallocate` 并**取真实退出码**（`| tail` 会吞掉失败）。
    ★ 大文件传输**走 R2 中转**，不要让按分钟计费的构建机干等：
    本轮直连 1 MB/s（2.7 GB 要 45 分钟）vs 上传 R2 43 MB/s（27 秒）。
+
+### D4. ★boot_control HAL 把"默认启动项=救援系统"这条安全网覆盖掉了
+`docs/INSTALL.md` 承诺"Android 挂死 → 拍电源键 → 自动回落到可远程接入的系统"，
+安装器也确实把 `default` 写成救援 Ubuntu。但 boot_control HAL **每次 Android
+启动都把当前槽位镜像进 `loader.conf`**（M6 的设计），于是首次进 Android 之后
+`default` 就变成 `*-android-b.conf` —— **安全网静默失效**，
+而症状只是"`adb reboot` 本想去 Ubuntu 却又回到 Android"。
+
+★ 现在有更好的解法了：[#42](stage4-findings.md) 证明 **Android 能写 EFI 变量**，
+`LoaderEntryOneShot` 可写可回读。
+
+**第一步**：让 HAL 只维护槽位信息、把 `default` 永远留给救援系统，
+需要切槽时写 oneshot 而不是改 default。顺带给设备加一个
+`gaokun3-reboot-to-rescue` 小工具（写 oneshot + reboot），
+远程救援就不再依赖 ESP 手术。
 
 ---
 

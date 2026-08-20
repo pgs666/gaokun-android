@@ -989,3 +989,168 @@ sound/soc/codecs/wcd938x.c:192
   列控件用不带参数的 `tinymix`。我第一次因此得出"没有 HPH 控件"的错误结论。
 * `tinymix` **可以直接用带空格的控件名**（`tinymix 'CLSH Switch' 1`），
   不必像早期脚本那样用控件编号。用名字更好 —— **编号会随内核/拓扑变化而漂移**。
+
+
+## #41 ★Venus 硬件视频编解码：内核这一半已打通并实机验证（2026-08-21）
+
+`/dev/video0` = `qcom-venus-decoder`、`/dev/video1` = `qcom-venus-encoder`，
+`aa00000.video-codec` 绑在 `qcom-venus` 驱动上，`abf0000.clock-controller`
+绑在 `sm8350-videocc` 上，**延迟 probe 队列空**，**固件加载失败 0 行**。
+据我们所知这是 sc8280xp 上第一次在主线内核 + Android 里把 Venus 跑起来。
+
+### 三个前提，动手前逐个核实过（都不缺）
+
+1. **时钟控制器主线已有**：`drivers/clk/qcom/videocc-sm8350.c` 自己就认
+   `"qcom,sc8280xp-videocc"`（该文件 :537 与 :572 两处），不用写新驱动。
+2. dt-bindings 头文件在：`include/dt-bindings/clock/qcom,sm8350-videocc.h`。
+3. ★**固件我们一直在装，只是名字骗了我**。DTS 补丁把 `firmware-name` 指向
+   `qcom/sc8280xp/HUAWEI/gaokun3/qcvss8280.mbn` —— 而 `firmware/README.md` 里
+   那一行当初被我标成"语音服务（未用到，一并带上）"。
+   **VSS = Video SubSystem，不是 Voice。** 设备上实测在，2035748 字节。
+   驱动确实读 DT 覆盖：`drivers/media/platform/qcom/venus/firmware.c:224`
+   `of_property_read_string_index(dev->of_node, "firmware-name", 0, ...)`。
+
+### 补丁：8 个里打 7 个
+
+`refs/linux-gaokun/patch sets/media/` 的 0013–0020。主线 v7.2 里
+`sm8350_res` / `sc8280xp_res` / `llcc_path` / 两个 compatible **一个都没有**
+（grep 全 0），所以整套都要打。
+
+* **0014 跳过** —— 纯格式清理（去 of_match 表的尾逗号），而主线已分叉
+  （多了 msm8939，sc7280/sm8250 被挪进 `#if !IS_ENABLED(CONFIG_VIDEO_QCOM_IRIS)`），
+  打不上也不影响功能。
+* 0017/0018/0019 需要 `patch -p1 -F3` 的 fuzz，其余 `git apply` 直接过。
+* ⚠️ 我们的内核补丁是**铺在工作树上没提交**的，所以只能 `git apply`，不能 `git am`；
+  打完要复核自己的补丁还在（`cooling-maps` 9 处、`gpio174` 1 处，都在）。
+
+### ★ compatible 选 `sc8280xp` 而不是 `sm8350`
+
+0019 的 DTS 原文写的是 `qcom,sm8350-venus`，但 0018 专门为本 SoC 加了
+`sc8280xp_res`。两个资源结构**只差一个 freq_tbl**：`sm8350_res` 借用
+`sm8250_freq_table`（444/366/338/240 MHz），`sc8280xp_res` 有自己的
+（240/338/366/444/533/560 MHz）。既然 0018 就是为本 SoC 加的，用它才对
+（否则 0018 是死代码）。bindings 里两个都文档化了
+（`Documentation/devicetree/bindings/media/qcom,sm8350-venus.yaml:22-23`）。
+
+⚠️ **顺带发现一个上游小 bug，但【故意不改】**：`sc8280xp_freq_table` 是**升序**，
+而其他 SoC 的表（msm8916/msm8996/sdm845/sc7180/sc7280）**全是降序**。
+查了消费者才敢下结论：V6 走的 `load_scale_v4` 用的是 **OPP 框架**
+（`dev_pm_opp_find_freq_floor/ceil`），`freq_tbl` 只在两处用到 ——
+`core_get_v4` 在 **DT 没有 OPP 表时**拿它填 OPP（我们的 DTS 有），
+以及 `core_clks_enable` 在 OPP 查找失败时取 `freq_tbl[size-1]` 兜底。
+所以在我们这个配置下升序**无害**；改了反而是未经验证的偏离。
+（若哪天去掉 DT 的 OPP 表，兜底就会取到 560 MHz 最高档而不是 240 MHz 最低档。）
+
+### ⚠️★ 最难猜的一步：必须关掉 `CONFIG_VIDEO_QCOM_IRIS`
+
+不关的话 Venus 编不过，而**报错完全看不出跟它有关**：
+
+```
+core.c:1192: error: 'sm8350_reg_preset' undeclared here
+core.c:1194: error: 'sm8250_bw_table_enc' undeclared here
+core.c:1210: error: 'VPU_VERSION_IRIS2' undeclared here
+core.c:1282: error: 'sm8350_res' undeclared here
+```
+
+看起来像补丁打错了。真相是主线 v7.2 引入了新的 iris 驱动接管 IRIS2 世代，于是
+`core.c:1017` 的 `#if (!IS_ENABLED(CONFIG_VIDEO_QCOM_IRIS))` 把
+`sm8250_freq_table` / `sm8250_bw_table_{enc,dec}` / `sm8350_reg_preset` 全编掉，
+`core.h:58` 连 `VPU_VERSION_IRIS2` 都没了 —— 而 `sc8280xp_res` 正好引用其中四个。
+
+★ **关它是对的，不是权宜**：iris 的 of_match 里只有 `qcs8300` / `sm8550` /
+`sm8650` / `sm8750` / `x1p42100`，**没有 sc8280xp 也没有 sm8350** ——
+它永远服务不了本机，却把本机需要的代码删掉了。而且它是 `=m`，Android 不加载模块。
+
+### ⚠️★ 又是 "=m 坑"，这次整条链上有五个
+
+刷机前的实测值：`MEDIA_SUPPORT=m`、`VIDEO_DEV=m`、`VIDEOBUF2_DMA_CONTIG=m`、
+`V4L2_MEM2MEM_DEV=m`、`SM_VIDEOCC_8350=m`。Android **不加载任何模块**，
+所以只 `--enable VIDEO_QCOM_VENUS` 会得到"配置里明明开了、设备却不存在"。
+八个符号全部拉 `=y` 并写进 `scripts/kernel-config-android.sh` 的 MUST_Y 断言
+（44 → 52 条），`VIDEO_QCOM_IRIS` 进 MUST_N。
+
+### ⚠️ 一个会骗过自己的构建脚本写法
+
+第一次构建报 `KBUILD_RC=0` 而实际 `drivers/media` 编译失败 ——
+因为 `make ... | tail -30` 之后取的 `$?` 是 **tail 的退出码**。
+判据要看产物时间戳：`Image` 还停在旧的 10:09，只有 DTB 是新的。
+（本仓在 az CLI 上记过同一个坑，这次是在 make 上重演。）
+
+### 还没做的另一半：Android 侧的 Codec2 组件
+
+内核给出的是 V4L2 M2M 设备，Android 要用它还需要一个 Codec2 组件。
+★ 好消息：**`external/v4l2_codec2` 本来就在 crDroid 的 manifest 里**
+（`LineageOS/android_external_v4l2_codec2`，groups="pdk"），不用新增仓库。
+现有 66 个解码器仍然全是软解。
+
+
+## #42 ★Android 上**能**写 EFI 变量 —— 推翻 M4/M6 的判断（2026-08-21）
+
+M4/M6 记的是"`efi=noruntime` 所以 Android 写不了 `LoaderEntryOneShot`，
+要进别的系统只能先重启到救援 Ubuntu 用 `bootctl set-oneshot`"。**这是错的。**
+
+实测（cmdline 里确实有 `efi=noruntime`）：
+
+```
+mount -t efivarfs none /data/local/tmp/efivars   → rc=0，列出 78 个变量
+读 LoaderEntrySelected / LoaderDevicePartUUID    → 正常（UTF-16LE）
+写 LoaderEntryOneShot-4a67b082-...               → rc=0，回读正确
+```
+
+写法：4 字节属性（`NV|BS|RT` = `0x07`，小端）+ 条目名的 UTF-16LE + 双字节 NUL。
+覆盖已存在的变量前要 `chattr -i`。
+
+**为什么这条重要**：它让 Android **自己**就能安排"下一次启动进救援系统"，
+而且是 oneshot —— 失败会自动回落到 `default`。这正是"远程优先"缺的最后一块。
+本轮就靠它安全地试了 Venus 内核：`default` 全程保持已知可用的 slot_b 不动，
+oneshot 指向临时条目；万一新内核起不来，一次断电就回到能用的系统。
+
+### ⚠️ 顺带查明：boot_control HAL 会把"默认项=救援系统"这条纪律覆盖掉
+
+`loader.conf` 里读到的是 `default *-android-b.conf` —— 不是安装器写的
+`*-int-ubuntu.conf`。因为 boot_control HAL **每次 Android 启动都把当前槽位
+镜像进 loader.conf**（M6 的设计）。于是 `docs/INSTALL.md` 里承诺的
+"Android 挂死 → 拍电源键 → 自动回落到可远程接入的系统"这条安全网，
+**在首次进 Android 之后就静默失效了**。
+本轮的 `adb reboot` 本想去 Ubuntu，结果又回到 Android，就是这么发现的。
+有了上面的 oneshot 能力，正解是：让 HAL 只镜像槽位、把 `default` 留给救援系统，
+或者干脆改用 oneshot。已记入 TODO。
+
+### ⚠️ toybox 的 `mount` 要求 `/etc/fstab` 存在
+
+`mount -t vfat /dev/block/by-name/esp DIR` 直接报
+`mount: bad /etc/fstab: No such file or directory` 并 rc=1，**即使参数完整**。
+本机 `/etc -> /system/etc` 且没有 `fstab`。`adb remount` 后
+`: > /system/etc/fstab` 造一个空文件即可。
+（`/mnt` 在 adb shell 里不可写，挂载点要放 `/data/local/tmp/` 下；
+且 **挂载与后续操作必须在同一次 `adb shell` 调用里**，命名空间不同。）
+
+
+## #43 光感 tcs3701 为什么不通：与能用的加速度计做逐字段对照（2026-08-21）
+
+#37 记了"光感使能后从不返回读数，而且会污染整个 SSC 会话"。这次把两份
+出厂配置逐字段对照，**排除了一条假设，并把嫌疑收敛到一处**。
+
+配置在 `/vendor/etc/hexagonrpcd-root/sensors/config/`（华为专有，不入库）：
+
+| 字段 | sh3001 加速度计（**能用**）| tcs3701 光感（**不通**）|
+|---|---|---|
+| `bus_type` / `bus_instance` | I2C / **1** | I2C / **5** |
+| `slave_config` | 54 (0x36) | 57 (0x39) |
+| `dri_irq_num` / `irq_is_chip_pin` | 32 / 1 | 127 / 1 |
+| `irq_trigger_type` | 3 | 1 |
+| `num_rail` / `rail_on_state` | 1 / **1** | 1 / **2** |
+| `vddio_rail` | `/pmic/client/sensor_vddio` | **同一条** |
+
+* ❌ **"DSP 够不到 PMIC 电源轨"被排除** —— 能用的加速度计走的是**同一条轨**。
+* ❌ **"SLPI 用不了主 SoC 的 TLMM 脚做中断"也站不住** —— 加速度计同样是
+  `irq_is_chip_pin=1`（GPIO 32）。（保留一点余地：加速度计约 8.7 Hz 的流也可能
+  是轮询出来的，这条没有被同等强度地证否。）
+* ★ **嫌疑收敛到 `bus_instance` 1 vs 5**，其次是 `rail_on_state` 1 vs 2。
+  而且它正好能解释"污染整个会话"：往一个没起来的 I2C 控制器发事务会在 SEE
+  里挂住，之后连加速度计也读不到，必须重启 hexagonrpcd。
+
+**下一步**：找 SLPI 侧 I2C 实例号到实际 QUP 控制器的映射，确认 instance 5
+是否需要 AP 让出某个控制器（或需要 AP 侧不去 claim 它）。
+本机 AP 的 DTS 里有哪些 i2c 节点是开着的，是可以直接比对的。
+

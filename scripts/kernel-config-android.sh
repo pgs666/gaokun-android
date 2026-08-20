@@ -193,6 +193,21 @@ OUT="${1:?用法: $0 <kernel-out-dir>}"
 #   依赖 EFI_GENERIC_STUB（本机已 =y）。
 ./scripts/config --file "$OUT/.config" --enable EFI_ZBOOT
 
+# ⚠️★ 必须【关掉】CONFIG_VIDEO_QCOM_IRIS —— 否则 Venus 编不过，而报错完全
+#   看不出跟它有关。主线 v7.2 引入了新的 iris 驱动接管 IRIS2 世代，于是 venus
+#   里这些东西被条件编译掉了：
+#     drivers/media/platform/qcom/venus/core.c:1017
+#       #if (!IS_ENABLED(CONFIG_VIDEO_QCOM_IRIS))
+#       这道守卫之后是 sm8250_freq_table / sm8250_bw_table_enc /
+#       sm8250_bw_table_dec / sm8350_reg_preset
+#     drivers/media/platform/qcom/venus/core.h:58 连 VPU_VERSION_IRIS2 也没了
+#   而 sc8280xp_res 正好引用其中四个 → 一串 "undeclared here" 报在 core.c 里，
+#   读起来像是补丁打错了。
+#   ★ 关它是对的，不是权宜：iris 的 of_match 里只有 qcs8300 / sm8550 / sm8650 /
+#     sm8750 / x1p42100，**没有 sc8280xp 也没有 sm8350** —— 它永远服务不了本机，
+#     却把本机需要的代码删掉了。而且它是 =m，Android 压根不加载模块。
+./scripts/config --file "$OUT/.config" --disable VIDEO_QCOM_IRIS
+
 # ─── Stage 6 M14: Venus 硬件视频编解码（V4L2 M2M）───
 # ★ 为什么现在能做：三个前提本地核实过，一个都不缺。
 #   1. 时钟控制器【主线已有】：drivers/clk/qcom/videocc-sm8350.c 自己就认
@@ -257,7 +272,7 @@ for s in $MUST_Y; do
     esac
 done
 # 反向断言：这些**必须关**，开着会主动破坏 Android
-MUST_N="RT_GROUP_SCHED"
+MUST_N="RT_GROUP_SCHED VIDEO_QCOM_IRIS"
 for s in $MUST_N; do
     if grep -qE "^CONFIG_$s=(y|m)" "$OUT/.config"; then
         echo "  ✗ CONFIG_$s 开着 —— 必须 =n（见脚本内注释）"; bad=1
