@@ -4,7 +4,8 @@
 
 来源：
 - 本地路径：`/home/user/Project/EGoTouchRev-Linux/touchscreen-hx83121a-dkms/`
-- 上游仓库：`https://github.com/pgs666/EGoTouchRev-Linux`（origin）
+- 上游仓库：`https://github.com/pgs666/EGoTouchRev-Linux`
+- 分支：`windows-v1.1.2-port`
 - 当前提交：`03ffefe fix: stabilize touch tracking and DKMS deployment`
 
 许可证：GPL-2.0（与上游 EGoTouchRev-Linux 一致）。
