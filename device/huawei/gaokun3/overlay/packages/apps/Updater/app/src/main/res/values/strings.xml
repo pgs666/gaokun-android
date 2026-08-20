@@ -15,25 +15,33 @@
 <resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
 
     <!--
-      ★ Must be raw.githubusercontent.com, not github.com/…/raw/….
+      ★ Hosted on Cloudflare R2 behind a custom domain, not on r2.dev and not
+      on GitHub.
 
-      UpdatesNetworkDataSource builds its OkHttp client with
-      .followRedirects(false), so any URL that answers 3xx fails outright.
-      Measured from the device itself (2026-08-20):
-          raw.githubusercontent.com/…            HTTP 200   ← this one
-          cdn.jsdelivr.net/gh/…                  HTTP 200   (works, but the
-                                                  @main CDN cache can lag by
-                                                  days, which would hide a
-                                                  release)
-          github.com/…/raw/…                     HTTP 302   ← would fail
-      It also enforces https:// with a require() — plain http is a hard error.
+      Three constraints, all read out of UpdatesNetworkDataSource.kt rather
+      than assumed:
+        * .followRedirects(false) — any URL that answers 3xx fails outright.
+          Measured from the device: github.com/…/raw/… returns 302 and is
+          therefore unusable; raw.githubusercontent.com and this R2 custom
+          domain both return 200.
+        * require(base.startsWith("https://")) — plain http is a hard error.
+        * Nothing else can override it: there is no property, no config file.
+
+      Why a custom domain rather than the bucket's pub-*.r2.dev URL:
+      Cloudflare documents r2.dev as development-only, rate limited, and not
+      fully cached. Shipping a 1 GiB ROM through it would get throttled. A
+      custom domain is proxied and cached normally.
+
+      ⚠️ If you ever add a Redirect Rule or Page Rule on this hostname, the
+      manifest fetch dies with "Unexpected HTTP status: 301" and nothing will
+      point you at the rule as the cause.
 
       {device} is replaced with DeviceInfoUtils.device, which reads
       ro.crdroid.device (= gaokun3), so this resolves to ota/gaokun3.json —
       the manifest committed in this repository. Keeping the placeholder rather
       than hardcoding the filename means a second device would work unchanged.
     -->
-    <string name="updater_server_url" translatable="false">https://raw.githubusercontent.com/vahiru/gaokun-android/main/ota/{device}.json</string>
+    <string name="updater_server_url" translatable="false">https://ota.072172.xyz/ota/{device}.json</string>
 
     <!--
       The stock strings point at crdroid.net and SourceForge, which have never
