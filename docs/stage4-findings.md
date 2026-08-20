@@ -823,3 +823,89 @@ shutdown，不是 `LOG(FATAL)`**，所以 `init_fatal_panic` 覆盖不到，psto
 跑到机器旁按电源键。ramdisk 照样铺（无害，14 MB，将来验证要用）。
 要调试：安装器 `ENABLE_RECOVERY_ENTRY=1`，OTA 钩子
 `setprop persist.gaokun3.recovery_entry 1`。
+
+---
+
+## #40 耳机口不出声：内核侧完全就绪，卡在后端 RX_CODEC_DMA_RX_0 打不开（2026-08-20）
+
+用户报告耳机接口不能用。实测下来是**两个独立的阻塞点**，而且第二个不是改配置能解决的。
+
+### 内核侧是完全好的 —— 这点先说清，别再去查它
+
+* **插孔检测在工作**：`/proc/bus/input/devices` 里有
+  `"SC8280XP-HUAWEI-GAOKUN3 Headset Jack"`（input12），
+  `capabilities/sw = 0xd4` → `SW_HEADPHONE_INSERT(2)` /
+  `SW_MICROPHONE_INSERT(4)` / `SW_LINEOUT_INSERT(6)` /
+  `SW_JACK_PHYSICAL_INSERT(7)` 四位都声明了。
+* **插入被真的识别了**：`dumpsys input` 显示
+  `SwState (pressed): SW_HEADPHONE_INSERT, SW_MICROPHONE_INSERT, SW_JACK_PHYSICAL_INSERT`。
+* ★**编解码器不但活着，还量出了耳机阻抗**：`HPHL Impedance 62` / `HPHR Impedance 61`、
+  `HPH Type 2`。阻抗检测要求 WCD938x 已上电并在通信，所以它没问题。
+* **SoundWire 枚举正常**：`sdw:2:0:0217:010d:00:4` 与 `sdw:3:0:0217:010d:00:3`
+  = mfg 0x0217 / part 0x010d = **WCD938x**，在 RX 与 TX 两条链路上都在。
+  （另外两个 `0217:0202` 是 WSA8830 扬声器。）
+* `3200000.rxmacro` 已 probe（driver=rx_macro），
+  `/sys/kernel/debug/devices_deferred` 是**空的**。
+
+### 阻塞点 1：Android 音频策略里根本没有耳机设备
+
+`primary_audio_policy_configuration.xml` 里声明的输出设备只有
+`AUDIO_DEVICE_OUT_SPEAKER` 与 `AUDIO_DEVICE_OUT_TELEPHONY_TX`；输入只有
+`BUILTIN_MIC` / `FM_TUNER` / `TELEPHONY_RX`。
+**没有 `WIRED_HEADPHONE` / `WIRED_HEADSET`，也没有耳机麦克风的输入设备。**
+
+实机对应现象：`dumpsys audio` 里只有 `speaker(2)`，
+logcat 里 `WiredHeadsetManager: ACTION_HEADSET_PLUG event, plugged in: false`。
+→ 即使底层能出声，框架也永远不会往那边路由。**这一条我们自己能修。**
+
+### ★ 阻塞点 2（更硬）：后端 `RX_CODEC_DMA_RX_0` 打不开
+
+整条混音器通路可以被完整配置起来 —— 全部接受写入并能回读：
+
+```
+RX HPH Mode      CLS_H_INVALID -> CLS_H_LOHIFI
+RX_MACRO RX0/RX1 MUX   ZERO -> AIF1_PB
+HPHL/HPHR_RDAC Switch  Off  -> On
+HPHL/HPHR Switch       Off  -> On
+RX_CODEC_DMA_RX_0 Audio Mixer MultiMedia1  Off -> On
+```
+
+但 `tinyplay … -d 0`（MultiMedia1）返回 **`Error playing sample`**，
+`/proc/asound/card0/pcm0p/sub0/status` 保持 `closed`，
+而**内核一条错误都没有**（`dmesg` 里只有传感器那边的 `Handover signaled` 噪声）。
+
+**干净的 A/B 把责任定位到后端**：
+* 把已知能用的前端 **MultiMedia2** 从 WSA 后端改接到 RX 后端
+  （`tinymix 202 0 0` + `tinymix 204 1 1`）→ **同样 `Error playing sample`**。
+* 恢复 WSA 路由后，同一个前端、同一个文件**立刻又能播**。
+→ 所以失败与前端无关，是 **`RX_CODEC_DMA_RX_0` 这个后端本身开不起来**。
+
+两个 PCM 的能力**完全相同**（48 kHz / 2ch / S16_LE / period 480–16320），
+所以不是格式不匹配；两个 PCM 当时都是 `closed`，也不是被占用（EBUSY）。
+
+### 还不知道的部分（不要假装知道）
+
+为什么后端开不起来 —— **没有定论**。候选：
+1. 华为那份 `audioreach-tplg.bin` 里可能没有这条路径的 **APM 图**
+   （DAPM 控件来自拓扑，所以"控件存在"不等于"图存在"）；
+2. RX 侧 soundwire/时钟/电源域在播放启动时没被真正拉起；
+3. q6apm 的 graph open 失败但没打日志。
+
+### ★ 建议的第一步：拿救援 Ubuntu 做对照
+
+本机有一个**同内核、同固件、同拓扑**的 Linux（内置救援 Ubuntu），而 ALSA/UCM
+在那边是原生的。判据很干净：
+
+* **Ubuntu 下耳机能出声** → 拓扑与内核都没问题，责任在 Android 侧
+  （策略缺设备 + 我们打开后端的方式不对）→ 我们能修。
+* **Ubuntu 下也不出声** → 内核/拓扑层面的问题，属上游或需要华为拓扑的逆向
+  → 不要在 Android 侧继续投入。
+
+这条对照本仓做过同类的（s2idle 就是这样定性成内核/EC 缺陷的），成本很低。
+
+### 顺带记两个会误导人的点
+
+* `tinymix contents` **不是这个版本的子命令**（报 `Invalid mixer control: contents`）。
+  列控件用不带参数的 `tinymix`。我第一次因此得出"没有 HPH 控件"的错误结论。
+* `HPHL/HPHR Volume` 的 **24 就是最大值**（range 0→24）。
+  调试时先压到 8 左右再开通路，否则耳机里会很吵。

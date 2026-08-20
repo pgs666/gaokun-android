@@ -36,7 +36,7 @@ Everything below was measured on hardware, not inferred. The evidence is in
 | Wi-Fi | ✅ | ath11k / WCN6855 |
 | Bluetooth | ⚠️ | Works — `hci_qca`, adapter `ON`, zero crashes at boot. **But it can deadlock after long uptime**, together with audio; see [#38](docs/stage4-findings.md) |
 | Speakers | ⚠️ | Works — user-confirmed, WSA883x via audioreach. **But audio can deadlock after long uptime**, together with Bluetooth; see [#38](docs/stage4-findings.md) |
-| Headphone jack / microphone | ❓ | Jack detection and 15 HPH mixer controls exist; untested |
+| Headphone jack / microphone | ❌ | Tested. The kernel side is fine — insertion is detected and the codec even measures the headphone impedance — but the `RX_CODEC_DMA_RX_0` backend refuses to open, with any frontend and no kernel error, while the speaker backend works. Android also declares no headphone device in its audio policy at all. [#40](docs/stage4-findings.md) |
 | Battery, charging, lid switch | ✅ | Huawei EC driver |
 | **Gaming** | ✅ | Genshin Impact at max graphics, smooth. GPU idles at 270 MHz, peaks 690 MHz, 50 °C |
 | CPU thermal throttling | ✅ | Mainline DTS has **no** CPU cooling maps at all — fixed in [`patches/0009`](patches/) |
