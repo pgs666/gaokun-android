@@ -58,11 +58,13 @@ printf '0\n'       > "$P/socinfo/platform_subtype_id"
 printf '65536\n'   > "$P/socinfo/platform_version"
 printf '449\n'     > "$P/socinfo/soc_id"
 printf '3.1\n'     > "$P/socinfo/revision"
-# ★ DSP 固件在 Windows 上编译，请求的路径带尾随 \r。socinfo 走真实文件系统，
-#   所以 symlink 就够；registry 走 hexagonfs 内部 VFS，必须靠下面那个补丁。
-for f in hw_platform platform_subtype platform_subtype_id platform_version soc_id revision; do
-    ln -sf "$f" "$P/socinfo/${f}"$'\r'
-done
+# ★ DSP 固件在 Windows 上编译，请求的路径**每一段都带尾随 \r**。
+#   ⚠️ 贡献者指南在这里建了 6 个带 \r 的 symlink（理由是 socinfo 走真实文件系统，
+#   symlink 就够）。**本仓实测证明那是多余的**：下面那个补丁打在
+#   copy_segment_and_advance() 里，那是【通用】分段解析函数，清理后的 segment 才
+#   分派给各后端（hexagonfs.c:179），所以物理目录后端同样受益。
+#   实测把 6 个 symlink 全部移走，加速度计照样 Z≈9.86 正常读数。
+#   → 这条同时让 Android 侧能用普通 PRODUCT_COPY_FILES（造不出带控制字符的文件名）。
 
 say "5/8 传感器文件"
 cp "$SRC"/*.json          "$P/sensors/config/"
