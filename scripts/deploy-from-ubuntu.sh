@@ -128,6 +128,15 @@ flash_boot() {
 
 flash_rollback() {
   # 回到换轨前那套 AOSP 16（归档于构建机，sha256 校验过）。
+  #
+  # ⚠️★ 2026-08-20 起这个函数【已过时，不要直接用】：它往 $ESP/ramdisk.img
+  #   这个扁平路径写，而 ESP 已改成每槽独立目录（slot_a/ slot_b/），
+  #   那个文件now没人读 —— 会"成功"却毫无作用，正是本仓反复踩过的那类坑。
+  #   而且归档的 AOSP 16 用的是未压缩 Image + 旧 cmdline（无 slot_suffix），
+  #   在 A/B 化之后根本起不来。
+  #   真要回退到 Stage 5，得先手工把 BLS 条目改回扁平路径。
+  #   ★ 日常回退请用 A/B：oneshot 到另一个槽的条目即可。
+  echo "⚠️ rollback 已过时（ESP 已改为每槽目录），请先读本函数的注释" >&2
   # 内核/DTB 不用换：crDroid 与 AOSP 用的是同一个 kb21 内核。
   echo "════ 回退到 Stage 5 的 AOSP 16 ════"
   pull "$KEEP/super.img"   /tmp/super-rollback.img
