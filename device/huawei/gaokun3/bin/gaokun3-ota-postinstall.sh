@@ -1,6 +1,6 @@
 #!/system/bin/sh
 #
-# A/B OTA 的 postinstall 钩子：把刚刷好的那个槽的内核搬到 ESP 上。
+# A/B OTA 的 postinstall 钩子：把刚刷好的那个槽的内核（与 recovery）搬到 ESP 上。
 #
 # 背景：本机按 Android 分区规范有 boot_a / boot_b，update_engine 会像刷别的
 # 分区一样把标准 Android boot 镜像刷进去。但引导链是 UEFI + systemd-boot，
@@ -10,6 +10,11 @@
 #   boot 分区 = 唯一真相源；ESP 上的文件 = 派生物。
 # 两个槽的 BLS 条目【永久】指向各自的 slot_a/ slot_b，所以这里只放文件、
 # 不改条目，也就绝不会碰到正在运行的那个槽 —— 回滚天然安全。
+#
+# recovery 走同一条路，但它【没有自己的分区】（安装器把剩余空间全给了
+# userdata，已装机器没有余地再切），所以它的 ramdisk 作为文件随 vendor 走
+# payload，在这里铺到 ESP 并派生出一个 BLS 条目。
+# ★ 于是已装的机器一次普通 OTA 就能拿到 recovery，不必重装。
 #
 # 自研的 EFI 加载器（读 misc 选槽 + 解析 boot 镜像 + 装 initrd/DTB 协议）
 # 就位之后，本脚本连同 ESP 上那些派生文件一起退役。
@@ -62,16 +67,49 @@ log "目标目录 = $DEST"
 #   而不是写出一个被截断的内核 —— 那会变成一台不开机的机器。
 #   目标目录里的旧文件会被覆盖，所以它们占的空间算作可用。
 avail_kb=$(df -k "$MNT" | tail -1 | awk '{print $4}')
-for f in Image ramdisk.img gaokun3.dtb; do
+for f in Image ramdisk.img gaokun3.dtb recovery-ramdisk.img; do
     [ -f "$DEST/$f" ] && avail_kb=$((avail_kb + $(stat -c%s "$DEST/$f") / 1024))
 done
 log "可用（含将被覆盖的旧文件）约 ${avail_kb} KB"
-# zboot 内核 13 MB + ramdisk 13 MB + dtb 0.2 MB ≈ 27 MB，要 40 MB 余量
-[ "$avail_kb" -gt 40960 ] || \
-    fail "ESP 空间不足（需约 40 MB）。清掉 <ESP>/$MID/android/ 下的 *.bak-* 再试"
+# zboot 内核 13 + ramdisk 13 + dtb 0.2 + recovery ramdisk 15 ≈ 42 MB，留 56 MB 余量
+[ "$avail_kb" -gt 57344 ] || \
+    fail "ESP 空间不足（需约 56 MB）。清掉 <ESP>/$MID/android/ 下的 *.bak-* 再试"
 
 # 解包器自己会写临时文件再改名，并逐段核对长度
 "$EXTRACT" "$BOOT_DEV" "$DEST" || fail "从 $BOOT_DEV 解包失败"
+
+# ── recovery ────────────────────────────────────────────────────────────────
+# ★ recovery 与系统【共用同一个内核和 dtb】（实测 recovery.img 里的 kernel 与
+#   boot.img 里的 sha256 完全相同），所以条目直接复用该槽刚解出来的
+#   Image 与 gaokun3.dtb，ESP 上只多一个 ramdisk。
+REC_SRC="$HERE/../boot/recovery-ramdisk.img"
+if [ -f "$REC_SRC" ]; then
+    log "铺设 recovery ramdisk"
+    if cp "$REC_SRC" "$DEST/.recovery-ramdisk.new" &&
+       mv -f "$DEST/.recovery-ramdisk.new" "$DEST/recovery-ramdisk.img"; then
+        # ★ 条目【从该槽的 android 条目派生】，只替换 initrd/title/version/sort-key。
+        #   这样 cmdline（含 slot_suffix）永远与主条目一致，不会漂 —— 本仓已被
+        #   BOARD_KERNEL_CMDLINE 与 BLS 条目漂移各教育过一次。
+        #   recovery 不需要特殊 cmdline：实测它内嵌的 cmdline 与 boot 的完全相同，
+        #   是 ramdisk 决定它是 recovery。
+        SRC_ENT="$MNT/loader/entries/$MID-android-$SUFFIX.conf"
+        DST_ENT="$MNT/loader/entries/$MID-recovery-$SUFFIX.conf"
+        if [ -f "$SRC_ENT" ]; then
+            sed -e "s|^initrd .*|initrd     /$MID/android/slot_$SUFFIX/recovery-ramdisk.img|" \
+                -e "s|^title .*|title      Recovery (gaokun3) — slot _$SUFFIX|" \
+                -e "s|^version .*|version    gaokun3-recovery-$SUFFIX|" \
+                -e "s|^sort-key .*|sort-key   zzrecovery$SUFFIX|" \
+                "$SRC_ENT" > "$DST_ENT" &&
+                log "recovery 条目已写: $MID-recovery-$SUFFIX.conf"
+        else
+            log "警告: 找不到 $SRC_ENT，跳过 recovery 条目"
+        fi
+    else
+        log "警告: recovery ramdisk 写入失败，recovery 条目不会更新"
+    fi
+else
+    log "vendor 里没有 recovery-ramdisk.img，跳过 recovery（旧 vendor 会这样）"
+fi
 
 sync
 umount "$MNT" || log "警告: umount 失败（数据已 sync）"

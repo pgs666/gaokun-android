@@ -29,7 +29,32 @@ TARGET_BOOTLOADER_BOARD_NAME := gaokun3
 # ------------------------------------------------------- 没有 bootloader
 # 本机是 UEFI + systemd-boot，不是 fastboot 设备，也没有 recovery 分区。
 TARGET_NO_BOOTLOADER := true
-TARGET_NO_RECOVERY   := true
+# ★★ 2026-08-20：开始构建【独立的】recovery.img。
+#
+# 为什么要：本机没有 recovery，于是 misc 的 BCB 里那条 `boot-recovery` 命令
+# 没人消费（实机确认过它就躺在那儿）—— 也就是说"重启进 recovery"和设置里的
+# 恢复出厂设置这类请求，在本机是发出去就掉进黑洞的。顺带 fastbootd 也没有，
+# 因为它住在 recovery 的 ramdisk 里。
+#
+# ⚠️★ 绝对不要用 BOARD_USES_RECOVERY_AS_BOOT：board_config.mk:463 一旦看到它
+#   就把 BUILDING_BOOT_IMAGE 关掉，那会直接推翻我们的 boot.img（A/B 的常规做法
+#   是 recovery 合进 boot，但那条路和本机"独立 boot 镜像"的方案互斥）。
+#   所以走"独立 recovery.img"这条老路：BUILDING_RECOVERY_IMAGE 的四个入口里
+#   （board_config.mk:502-518）我们用的是
+#   「定义 BOARD_RECOVERYIMAGE_PARTITION_SIZE 且 TARGET_NO_KERNEL/TARGET_NO_RECOVERY
+#    都不为 true」这一个。产物 = $(PRODUCT_OUT)/recovery.img（Makefile:285-298）。
+#   已核实 AB_OTA_UPDATER=true 与独立 recovery 之间没有冲突检查。
+#
+# ⚠️ recovery 不会有自己的分区。它会作为文件随 vendor 走 OTA，由 postinstall
+#   钩子铺到 ESP —— 这样【已装的机器一次普通 OTA 就能拿到 recovery】，
+#   而不必像 boot_a/boot_b 那样重装。理由：安装器把剩余空间全给了 userdata，
+#   已装机器没有空间再切分区。
+TARGET_NO_RECOVERY   := false
+BOARD_RECOVERYIMAGE_PARTITION_SIZE := 67108864
+# ★ 复用主 fstab，不另写一份 recovery.fstab —— 今天刚被 BOARD_KERNEL_CMDLINE
+#   与 BLS 条目漂移教育过：没有消费者的副本一定会漂。
+#   （默认查找位置是 $(TARGET_DEVICE_DIR)/recovery.fstab，Makefile:2620。）
+TARGET_RECOVERY_FSTAB := device/huawei/gaokun3/fstab.gaokun3
 BOARD_USES_GENERIC_KERNEL_IMAGE := false
 
 # ★★ 2026-08-20 起【生成真的 boot.img】，并把 boot 纳入 A/B OTA 范围。
