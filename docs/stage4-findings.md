@@ -392,9 +392,43 @@ dumpsys media.player → "Decoder infos by media types:" （空）
 
 ---
 
-## #37 传感器：不是"DTS 少了个节点"，是整套跑在 SLPI DSP 上（2026-08-20，此路在主线上不通）
+## #37 传感器：整套跑在 SLPI DSP 上 —— ★结论已修正，主线**能**做到（2026-08-20）
 
-### 结论先行
+> ### ⚠️ 本条原先的结论是错的，2026-08-20 当天被推翻
+>
+> 我原先写的是"主线此路不通，任何 sc8280xp 设备都没人做到过"。
+> **错。** 一位贡献者拿 **`hexagonrpcd`（linux-msm）+ `libssc`
+> （Dylan Van Assche，codeberg.org/dylanvanassche/libssc）** 在本机型上把
+> 三个传感器读出来了（light / accelerometer / gyroscope）。
+>
+> 下面的**结构性分析仍然成立**（传感器由 SLPI 托管、芯片挂在 SSC 侧总线、
+> AP 侧没有任何传感器芯片驱动），错的只是"因此不可达"这一步推论 ——
+> 可达路径是 **AP 通过 FastRPC 给 DSP 当文件服务器**，再用 QMI/protobuf
+> 取读数，而不是 AP 直接驱动芯片。
+>
+> ★**一个强互证**：贡献者的部署指南里 socinfo 要填
+> `QRD` / `Unknown` / `0` / `65536` / **`449`** / `3.1`，
+> 与我从 Windows 驱动里独立读出的完全一致（`tcs3701.json` 里就是
+> `"soc_id": ["449"]`、`hw_platform` 文件内容就是 `QRD`）。两边互相印证。
+>
+> ★**已经打通的第一步（实测）**：`CONFIG_QCOM_FASTRPC` 在本内核里是 **`=m`**，
+> 而这棵树**不发模块**（设备上 `/proc/modules` 是 0 行、连模块目录都没有），
+> 所以 `/dev/fastrpc-*` 从来不出现。DTS 里节点是齐的
+> （`remoteproc_slpi` 下 `fastrpc` + `compute-cb@1/2/3`），
+> rpmsg 通道也在（`2400000.remoteproc:glink-edge.*`）—— 只是没人 probe。
+> 单独编出 `fastrpc.ko` 推上去 `insmod`（vermagic 完全匹配、模块签名关闭）：
+> ```
+> /dev/fastrpc-sdsp   /dev/fastrpc-adsp   /dev/fastrpc-cdsp   /dev/fastrpc-cdsp-secure
+> ```
+> **这和 #33 音频那三个 `=m` 断点是同一类问题。** 正解是 `=y` 并加进
+> `scripts/kernel-config-android.sh` 的断言。
+>
+> ⚠️ 附带告警：`qcom,fastrpc 3000000.remoteproc:...: no reserved DMA memory
+> for FASTRPC`（出现在 ADSP 节点，SLPI 侧未报），待观察。
+>
+> **还差什么，见本条末尾的「落地路线」。**
+
+### 结构性分析（这部分是对的）
 
 **加速度计、磁力计、光感、接近、铰链角度，全部由 SLPI 传感器 DSP 托管，
 AP 侧根本没有到这些芯片的总线。** 因此：
@@ -466,3 +500,50 @@ bash scripts/probe-windows-sensors.sh
 ntfs-3g 显示为 `-> unsupported reparse tag 0x80000017`、`stat` 只有 34 字节，
 **读它们会 FileNotFoundError**；要读的是同目录下的**去掉 `8280_qrd_` 前缀**
 的那份实体文件（`sh3001_0.json` / `tcs3701.json` …）。
+
+### 落地路线（2026-08-20 状态）
+
+| 步骤 | 状态 |
+|---|---|
+| SLPI remoteproc running | ✅ 一直是 |
+| QRTR（`/dev/qrtr-tun`） | ✅ 一直是 |
+| **`/dev/fastrpc-sdsp`** | ✅ **已打通**，靠 `insmod fastrpc.ko`；正解是 `CONFIG_QCOM_FASTRPC=y` |
+| Windows DriverStore 的传感器文件 | ❌ **当前的硬阻塞** —— 见下 |
+| `hexagonrpcd`（给 DSP 当文件服务器） | ⬜ 需编译，且要打一个补丁 |
+| `libssc` + `ssccli`（读数） | ⬜ 需编译 |
+| **Android 侧 sensors HAL** | ⬜ 尚不存在，是独立的一大块 |
+
+#### ⚠️ 硬阻塞：Windows 分区已被抹掉
+
+贡献者的 Phase 4 / Phase 10 需要从 Windows DriverStore 取三类文件：
+
+* `qcsensorsconfigqrd8280*/*.json` —— 传感器驱动配置（我读过，**但没拷**）
+* `sns_reg_config` —— DSP 注册表索引。★**必须是 DriverStore 的文本格式
+  （约 407 B，`version=1` 开头），不能用 DriverData 的 JSON 格式（2423 B）**，
+  后者会让 DSP 注册表初始化崩溃
+* `RSCS.bin` —— SLPI 伴生固件
+
+**本机的 Windows 已在 2026-08-20 抹除**（见 `docs/hw-inventory.md` 8quinquies），
+所以只能从别处取：向贡献者索取、从 `uup-drivers-sc8280xp` 驱动包提取
+（`device/huawei/gaokun3/firmware/README.md` 记的那个来源）、
+或另一台仍装着 Windows 的 MateBook E Go。
+
+#### 两个已知的坑（贡献者踩出来的，转录以免重犯）
+
+1. **DSP 固件请求的路径带尾随 ``**（它是在 Windows 上编译的）。两处要分别处理：
+   * socinfo 走真实文件系统 → 建 `名字` 的 symlink 即可；
+   * registry 走 hexagonfs 的**内部 VFS**、不经过内核 symlink 解析
+     → **必须改 `hexagonrpcd/hexagonfs.c`**，在每段路径末尾截掉 ``。
+     apt 里的现成版本不带这个补丁，所以必须自己编。
+2. **`hexagonrpcd` 的 shell wrapper 不认识 sc8280xp**，会 fallback 到错误的
+   DSP；必须直接调二进制并显式给 `-f /dev/fastrpc-sdsp -d sdsp -s -R <VFS 根>`。
+
+#### 为什么先在救援 Linux 上验，再谈 Android
+
+`hexagonrpcd` 与 `libssc` 都是 Linux 侧的守护进程/库，贡献者的指南也是针对
+Linux 写的。先在内置的救援系统上跑通 `ssccli`，能一次性验证整条 DSP 通路
+（fastrpc → hexagonfs → DSP 注册表 → SSC → QMI 读数）。
+之后 Android 侧还需要：把 `hexagonrpcd` 移植进 Android（纯 C 守护进程，
+用 fastrpc ioctl + 一个 VFS，可移植性不差，但要写 Android.bp 和 sepolicy），
+再写一个 AIDL `android.hardware.sensors` HAL 把 libssc 的逻辑包起来喂
+SensorService。**那一块目前不存在，是独立的工程量。**
