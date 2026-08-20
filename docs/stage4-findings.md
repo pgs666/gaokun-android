@@ -1384,3 +1384,77 @@ Android 与 Windows 在高时延（40–50 ms）有损路径上的 TCP 行为差
 时间相关性非常诱人 —— 但只要多做一步"到网关 ping"和"LAN 大流量"，
 结论就整个反过来了。本仓 #37 与 #40 都有同类教训：
 **先把嫌疑分量隔离，再下结论。**
+
+
+## #45 s2idle 分层二分：工具就位、但我把机器弄停住了（2026-08-21）
+
+M4 把"挂得下去、醒不回来"定性成内核/EC 缺陷之后就卡住了，卡点很具体：
+**`/sys/power/pm_test` 需要 `CONFIG_PM_DEBUG`，而它没开。** 这一轮把它开了。
+
+### 内核侧（已完成，可复用）
+
+内核 **#20** = #19 + 这几项，`scripts/kernel-config-android.sh` 里已固化：
+
+```
+CONFIG_PM_DEBUG=y  CONFIG_PM_SLEEP_DEBUG=y  CONFIG_PM_ADVANCED_DEBUG=y
+CONFIG_EXPERT=y    CONFIG_DPM_WATCHDOG=y
+```
+
+实机确认 `/sys/power/pm_test` = `[none] core processors platform devices freezer`，
+另外多了 `pm_print_times` 与 `pm_debug_messages`。
+
+两个 Kconfig 依赖是查源码才知道的（`kernel/power/Kconfig`），**光 `--enable` 会静默无效**：
+
+* ⚠️★ **`PM_TRACE_RTC` 在 arm64 上不存在** —— 它 `depends on X86`，而 `PM_TRACE`
+  是个没有 prompt 的 bool，只能由它 select。**这很可惜**：那个机制（把最后执行的
+  设备 suspend/resume 哈希写进 RTC，机器不干净复位之后仍能读出来）
+  恰恰是为本机这种"userspace 已冻结、journald 来不及落盘、clean hang 不产生
+  panic"的症状设计的。**别再去找它了**，arm64 上的替代品是 DPM_WATCHDOG + pstore。
+* ⚠️★ **`DPM_WATCHDOG` 依赖 `PM_DEBUG && PSTORE && EXPERT`**。本机 PSTORE 早是 =y，
+  但 **EXPERT 没开**，所以必须一并打开。断言表当场抓住了这一条。
+* `DPM_WATCHDOG_TIMEOUT` 发布内核里保持默认 120 秒（压低会把合法的慢设备误判成
+  挂死）；测试内核单独设 **10 秒** —— 本机 ~13 秒就复位，120 秒永远轮不到它开火。
+
+### ⚠️ 我自己犯的两个错，都值得记
+
+**错一：先放开了 wakelock。** v1 脚本的顺序是「`wake_unlock` → 设 `pm_test` →
+写 `mem`」。放开的那一瞬间 Android 的 **SystemSuspend 抢先发起了一次【真实】挂起**
+（那时 `pm_test` 还是 `none`），于是走的正是已知会复位的那条路。
+日志停在 `########## pm_test = freezer ##########` 这一行，
+**看起来像"连 freezer 都挂"，其实压根没跑到 `echo mem`**。
+判据是 uptime：日志里 START 记的是 71，复位后读到 48。
+★ 正解：**`pm_test` 先设、全程不碰 wakelock**。持有 wakelock 不挡直接写
+`/sys/power/state`（`wakeup_count` 协议只在 `events_check_enabled` 时生效，
+而 SystemSuspend 正卡在那个 read 上），但它能保证 SystemSuspend 不来抢。
+
+**错二（代价更大）：测试条目的 cmdline 没有 `panic=`。**
+v2 顺序改对了，机器随即从 USB 与网络上同时消失，**并且没有回来**。
+最可能的情形是：某个设备的 resume 卡住 → DPM_WATCHDOG 在 10 秒时 panic →
+记录进 pstore → 而 `panic_timeout` 默认是 **0**，于是机器停在 panic 不自动重启。
+★ **做 DPM_WATCHDOG 测试时，`panic=10` 是那个唯一重要的 cmdline 选项** ——
+整个机制的目的就是 panic，而 panic 之后必须自己回来。
+我还在 v2 里删掉了 v1 有的 RTC 兜底闹钟，等于把第二道网也拆了。
+**后果：需要人按一次电源键**，违反了本项目"永不留下需要到机器旁的状态"这条纪律。
+
+### 这一轮实际得到的东西
+
+* 工具链就位且已入库：再做这件事**不需要先自己编一个内核**。
+* ★ **"停住"本身是新信息**：M4 观察到的是"20–40 秒后整机复位"，
+  而这次是**永久停住** —— 与"#19 没有 DPM_WATCHDOG、#20 有"完全吻合，
+  说明看门狗**开火了**，也就说明**确实有一个设备的 suspend/resume 回调卡住**
+  （而不是别的层）。这比 M4 的"resume 失败"精确了一格。
+* ★ **证据大概率已经留下**：pstore 走 efi_pstore（EFI 变量），**跨重启存活**，
+  且与哪个内核启动无关。下一次启动后读 `/sys/fs/pstore/`
+  （Ubuntu 侧是 `/var/lib/systemd/pstore/`）就能拿到卡住那个回调的栈。
+
+### 下次动手的正确姿势
+
+1. **测试条目的 cmdline 必须带 `panic=10`**，并保留 RTC 兜底闹钟。
+2. 更好的做法是**在救援 Ubuntu 里跑这套二分**，而不是 Android：
+   Ubuntu 是 `default` 项，任何挂死/复位都落回一个可远程接入的系统；
+   而且没有 SystemSuspend 来抢挂起，也不用绕 wakelock。
+   代价是要给 Ubuntu 那套配一份带 PM_DEBUG 的内核。
+3. 层级顺序 `freezer → devices → platform → processors → core`，
+   一层一次、每层前把层名写进标记文件（v2 这么做了，这一点是对的）。
+4. 先读 pstore 再重跑 —— 上一次的 panic 栈可能已经直接给出答案。
+

@@ -97,6 +97,27 @@
 且 `WiredAccessoryManager` 在 SystemServer 启动时只读一次，框架层也没有
 插拔模拟命令可用。
 
+### A9. ★s2idle 醒不回来 —— 工具已就位，下一步是读 pstore
+详见 [#45](stage4-findings.md)（以及 M4 的定性）。**内核 #20 已带
+`CONFIG_PM_DEBUG` / `PM_SLEEP_DEBUG` / `PM_ADVANCED_DEBUG` / `EXPERT` /
+`DPM_WATCHDOG`**，`/sys/power/pm_test` 实机可用，配置已固化进
+`scripts/kernel-config-android.sh` —— **再做这件事不需要先自己编内核**。
+
+★ 这一轮的新信息：以前是"20–40 秒后复位"，这次装了 DPM_WATCHDOG 之后变成
+**永久停住** —— 说明看门狗开火了，也就说明**确实有一个设备的 suspend/resume
+回调卡住**，而不是别的层。比"resume 失败"精确了一格。
+
+**第一步（下次开机后立刻做，别先重跑测试）**：
+读 `/sys/fs/pstore/`（Ubuntu 侧 `/var/lib/systemd/pstore/`）——
+DPM_WATCHDOG 的 panic 会把**卡住那个回调的栈**记在里面，走 efi_pstore
+（EFI 变量），跨重启存活。那可能直接就是答案。
+
+**第二步**：重跑二分时必须补两道网 ——
+测试条目 cmdline 加 **`panic=10`**（整个机制就是要 panic，panic 之后得自己回来），
+并保留 RTC 兜底闹钟。⚠️ 我这次两道网都没有，结果需要人按一次电源键。
+更好的做法是**在救援 Ubuntu 里跑**：它是 `default` 项，挂死也落回可远程接入的
+系统，而且没有 SystemSuspend 来抢挂起。
+
 ### A5. 恢复出厂设置不起作用
 设置里那条路走 misc 的 BCB + recovery，而本机没有可用 recovery
 （[#39](stage4-findings.md)）。实机证据：misc 里躺着一条没人消费的 `boot-recovery`。
