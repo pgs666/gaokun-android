@@ -57,7 +57,7 @@ echo "== 解压 artifact 到 $WORK =="
 unzip -q "$ARTIFACT" -d "$WORK"
 
 VMLINUZ=$(find "$WORK" -name 'vmlinuz.efi' -type f | head -1)
-DTB=$(find "$WORK" -name 'gaokun3.dtb' -type f | head -1)
+DTB=$(find "$WORK" -name 'sc8280xp-huawei-gaokun3.dtb' -type f | head -1)
 
 if [[ -z "$VMLINUZ" || ! -s "$VMLINUZ" ]]; then
     echo "错误: artifact 中找不到 vmlinuz.efi" >&2
@@ -76,7 +76,7 @@ RAMDISK_DIR="$WORK/ramdisk"
 mkdir -p "$RAMDISK_DIR"
 
 echo "== 从 $BOOT_A 解出 ramdisk / cmdline =="
-python3 - "$BOOT_A" "$RAMDISK_DIR" <<'PYEOF'
+sudo python3 - "$BOOT_A" "$RAMDISK_DIR" <<'PYEOF'
 import struct, sys, os
 img, out = sys.argv[1], sys.argv[2]
 os.makedirs(out, exist_ok=True)
@@ -127,7 +127,7 @@ echo "cmdline: $(cat "$CMDLINE")"
 BOOT_NEW="$WORK/boot-new-a.img"
 echo "== 打包新 boot.img =="
 
-python3 - "$BOOT_A" "$VMLINUZ" "$RAMDISK" "$DTB" "$BOOT_NEW" <<'PYEOF'
+sudo python3 - "$BOOT_A" "$VMLINUZ" "$RAMDISK" "$DTB" "$BOOT_NEW" <<'PYEOF'
 import struct, sys, os
 
 def align(x, page):
@@ -189,13 +189,13 @@ sync
 
 # ── 解包到 ESP slot_a ───────────────────────────────────────────────────────
 echo "== 更新 ESP slot_a =="
-MNT=$(mktemp -d /mnt/egotouch-esp.XXXXXX)
+MNT=$(mktemp -d /tmp/egotouch-esp.XXXXXX)
 trap 'sudo umount "$MNT" 2>/dev/null || true; rm -rf "$MNT"; rm -rf "$WORK"' EXIT
 
 sudo mount -t vfat "$ESP_DEV" "$MNT"
 sudo mkdir -p "$MNT/$MID/android/slot_a"
 
-python3 - "$BOOT_A" "$MNT/$MID/android/slot_a" <<'PYEOF'
+sudo python3 - "$BOOT_A" "$MNT/$MID/android/slot_a" <<'PYEOF'
 import struct, sys, os
 img, out = sys.argv[1], sys.argv[2]
 os.makedirs(out, exist_ok=True)
