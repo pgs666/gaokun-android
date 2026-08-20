@@ -57,9 +57,55 @@ set -- \
     "SpkrLeft PA Volume" 12 \
     "SpkrRight PA Volume" 12
 
-while [ $# -ge 2 ]; do
-    $M "$1" "$2" >/dev/null 2>&1 || log -t audioroute "设置失败: $1 -> $2"
-    shift 2
-done
+apply() {
+    while [ $# -ge 2 ]; do
+        $M "$1" "$2" >/dev/null 2>&1 || log -t audioroute "设置失败: $1 -> $2"
+        shift 2
+    done
+}
+apply "$@"
 
 log -t audioroute "扬声器路由已应用（PCM1 / WSA / PA=12 / BOOST=off 防爆音）"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 耳机（PCM 0 / RX_CODEC_DMA_RX_0 ← MultiMedia1）
+#
+# ★ 2026-08-20：耳机孔此前完全不出声，根因不是缺控件而是【插值器链没接】。
+#   我原先只设了 RX_MACRO RX0/RX1 MUX 就以为通路成立，实际 DAPM 中间断了一节：
+#     RX INT0_1 MIX1 INP0 = ZERO      （插值器混音器没选输入）
+#     RX INT0 DEM MUX     = NORMAL_DSM_OUT （解调器没切到 class-H 输出）
+#   于是后端 DAI 拿不到完整通路，PCM 0 直接打不开（且内核不报错，极难查）。
+#   补齐后实测：tinyplay -D 0 -d 0 rc=0、pcm0p state=RUNNING、
+#   hw_ptr 2 秒前进 97920 帧 = 48960 帧/秒（正好实时 48 kHz），dmesg 零报错。
+#
+# 序列逐条照抄上游 ALSA UCM2（上游 sc8280xp.conf 用 Regex "HUAWEI.*MateBook E.*"
+# 匹配本机并 include LENOVO-X13s.conf，所以 X13s 那套就是本机的官配）：
+#   codecs/wcd938x/HeadphoneEnableSeq.conf
+#   codecs/qcom-lpass/rx-macro/HeadphoneEnableSeq.conf
+#   codecs/qcom-lpass/rx-macro/init.conf   (RX_RXn Digital Volume 84)
+#   Qualcomm/sc8280xp/LENOVO-X13s.conf     (HPHL/HPHR Volume 2)
+#
+# ⚠️ HPH 音量为什么是 2 而不是默认的 24 —— 这个方向不能猜，从内核算：
+#   sound/soc/codecs/wcd938x.c:2620
+#     SOC_SINGLE_TLV("HPHL Volume", WCD938X_HPH_L_EN, 0, 0x18, 1, line_gain)
+#   sound/soc/codecs/wcd938x.c:192
+#     DECLARE_TLV_DB_SCALE(line_gain, -3000, 150, 0)
+#   → 控件值 v 对应 -30 + 1.5*v dB。默认 24 = 【+6 dB】，直接进耳朵；
+#     上游的 2 = -27 dB。耳机灵敏度远高于喇叭，衰减是对的，而且框架自己
+#     还有一层音量。嫌小就往上调，每 +1 = +1.5 dB（别接近 24）。
+#
+# 扬声器与耳机是两个不同后端（WSA vs RX），互不抢占，切换发生在 PCM 层面，
+# 所以两套路由可以都在开机时摆好；DAPM 按需上电，闲置不耗电。
+set --     "RX_CODEC_DMA_RX_0 Audio Mixer MultiMedia1" 1     "RX_RX0 Digital Volume" 84     "RX_RX1 Digital Volume" 84     "HPHL Volume" 2     "HPHR Volume" 2     "HPHL_RDAC Switch" 1     "HPHR_RDAC Switch" 1     "HPHL Switch" 1     "HPHR Switch" 1     "HPHR_COMP Switch" 0     "HPHL_COMP Switch" 0     "CLSH Switch" 1     "LO Switch" 1     "RX HPH Mode" CLS_H_ULP     "RX_HPH PWR Mode" LOHIFI     "RX_MACRO RX0 MUX" AIF1_PB     "RX_MACRO RX1 MUX" AIF1_PB     "RX INT0_1 MIX1 INP0" RX0     "RX INT1_1 MIX1 INP0" RX1     "RX INT0 DEM MUX" CLSH_DSM_OUT     "RX INT1 DEM MUX" CLSH_DSM_OUT     "RX_COMP1 Switch" 1     "RX_COMP2 Switch" 1
+apply "$@"
+
+log -t audioroute "耳机路由已应用（PCM0 / RX / HPH=-27dB / 含插值器链）"
+
+# 耳机麦克风（PCM 2 / TX_CODEC_DMA_TX_3 → MultiMedia3）
+#   codecs/wcd938x/HeadphoneMicEnableSeq.conf
+#   codecs/qcom-lpass/tx-macro/HeadphoneMicEnableSeq.conf
+# ADC2 Volume 10：analog_gain 是 MINMAX(0,3000) over 0->20，故 10 = +15 dB。
+set --     "MultiMedia3 Mixer TX_CODEC_DMA_TX_3" 1     "ADC2_MIXER Switch" 1     "HDR12 MUX" NO_HDR12     "ADC2 MUX" INP2     "ADC2 Switch" 1     "TX1 MODE" ADC_NORMAL     "ADC2 Volume" 10     "TX DEC0 MUX" SWR_MIC     "TX SMIC MUX0" ADC1     "TX_AIF1_CAP Mixer DEC0" 1     "TX_DEC0 Volume" 110
+apply "$@"
+
+log -t audioroute "耳机麦路由已应用（PCM2 / TX）"

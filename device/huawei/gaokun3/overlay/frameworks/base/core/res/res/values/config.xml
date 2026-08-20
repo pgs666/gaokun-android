@@ -33,4 +33,31 @@
     -->
     <integer name="config_defaultRefreshRate">120</integer>
 
+    <!--
+      Take headset jack insertion from an input device rather than from
+      /sys/class/switch/h2w.
+
+      WiredAccessoryManager has two ways to learn that something was plugged
+      into the jack. The default is the legacy switch class: it opens
+      /sys/class/switch/h2w and listens for uevents. That directory does not
+      exist on this machine and never will, because mainline has no h2w
+      driver; measured on device: "ls /sys/class/switch/" is ENOENT. So the
+      framework never learned about the jack at all, which is why plugging
+      headphones in did nothing even once the audio path itself worked.
+
+      With this true, WiredAccessoryManager consumes SW_HEADPHONE_INSERT and
+      SW_MICROPHONE_INSERT from an ordinary evdev switch device instead. That
+      source already exists and is already being read: the ALSA jack shows up
+      as input device "SC8280XP-HUAWEI-GAOKUN3 Headset Jack" (event12) with
+      SW bitmask 0xd4, which is HEADPHONE_INSERT, MICROPHONE_INSERT,
+      LINEOUT_INSERT and VIDEOOUT_INSERT, and dumpsys input already classifies
+      it as "KEYBOARD | SWITCH" with a live Switch Input Mapper. Nothing was
+      missing on the kernel side; only this flag.
+
+      Pairs with the Wired Headphone / Wired Headset device ports added to
+      audio/primary_audio_policy_configuration.xml, which is what turns the
+      resulting connection event into an actual ALSA device.
+    -->
+    <bool name="config_useDevInputEventForAudioJack">true</bool>
+
 </resources>

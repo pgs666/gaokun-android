@@ -89,7 +89,41 @@
         <devicePort tagName="Telephony Tx" type="AUDIO_DEVICE_OUT_TELEPHONY_TX" role="sink">
         </devicePort>
 
+        <!-- Headset jack. Removable, so deliberately NOT in attachedDevices:
+             the framework connects these when WiredAccessoryManager reports an
+             insertion, which needs config_useDevInputEventForAudioJack=true in
+             the framework overlay (this machine has no /sys/class/switch/h2w).
+
+             Both outputs are CARD_0_DEV_0. That is the RX_CODEC_DMA_RX_0
+             backend fed by MultiMedia1, which upstream ALSA UCM also uses for
+             Headphones on this SoC; the speaker is a different backend
+             (WSA_CODEC_DMA_RX_0 / MultiMedia2 / hw:0,1), so the two never
+             contend and the switch happens at the PCM level.
+
+             Profiles are spelled out rather than left dynamic. Speaker above
+             gets away with no profile because it is attached at boot; for a
+             removable device that would make the policy query the HAL at
+             connect time, and 48 kHz stereo 16-bit is the configuration
+             actually measured working on hw:0,0 (state RUNNING, hw_ptr
+             advancing 48960 frames/s). -->
+        <devicePort tagName="Wired Headphones" type="AUDIO_DEVICE_OUT_WIRED_HEADPHONE"
+                    role="sink" address="CARD_0_DEV_0">
+            <profile name="" format="AUDIO_FORMAT_PCM_16_BIT"
+                     samplingRates="48000" channelMasks="AUDIO_CHANNEL_OUT_STEREO"/>
+        </devicePort>
+        <devicePort tagName="Wired Headset" type="AUDIO_DEVICE_OUT_WIRED_HEADSET"
+                    role="sink" address="CARD_0_DEV_0">
+            <profile name="" format="AUDIO_FORMAT_PCM_16_BIT"
+                     samplingRates="48000" channelMasks="AUDIO_CHANNEL_OUT_STEREO"/>
+        </devicePort>
+
         <devicePort tagName="Built-In Mic" type="AUDIO_DEVICE_IN_BUILTIN_MIC" address="bottom CARD_0_DEV_3" role="source">
+        </devicePort>
+        <devicePort tagName="Wired Headset Mic" type="AUDIO_DEVICE_IN_WIRED_HEADSET"
+                    role="source" address="CARD_0_DEV_2">
+            <profile name="" format="AUDIO_FORMAT_PCM_16_BIT"
+                     samplingRates="48000"
+                     channelMasks="AUDIO_CHANNEL_IN_MONO AUDIO_CHANNEL_IN_STEREO"/>
         </devicePort>
         <devicePort tagName="Telephony Rx" type="AUDIO_DEVICE_IN_TELEPHONY_RX" role="source">
         </devicePort>
@@ -100,10 +134,14 @@
     <routes>
         <route type="mix" sink="Speaker"
                sources="primary output,compressed_offload"/>
+        <route type="mix" sink="Wired Headphones"
+               sources="primary output,compressed_offload"/>
+        <route type="mix" sink="Wired Headset"
+               sources="primary output,compressed_offload"/>
         <route type="mix" sink="primary input"
-               sources="Built-In Mic"/>
+               sources="Built-In Mic,Wired Headset Mic"/>
         <route type="mix" sink="mmap_no_irq_in"
-               sources="Built-In Mic"/>
+               sources="Built-In Mic,Wired Headset Mic"/>
 
         <route type="mix" sink="telephony_rx"
                sources="Telephony Rx"/>

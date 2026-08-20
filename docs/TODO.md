@@ -38,19 +38,32 @@ SSC 会话** —— 之后连加速度计也读不到，必须重启 `hexagonrpc
 确认 SSC 侧那条电源/中断在主线下是否真的可用。这是"DSP 侧驱动起不来"
 还是"我们缺了什么"的分水岭。
 
-### A4. 耳机口不出声 ❌ 已实测，两个独立阻塞点
-详见 [#40](stage4-findings.md)。**内核侧完全就绪**（插入被识别、编解码器量出了
-耳机阻抗 62/61 Ω、WCD938x 在 SoundWire 上、rx_macro 已 probe），
-但两处挡着：
-1. Android 音频策略里**压根没声明耳机设备**（只有 SPEAKER）→ 框架永不路由。这条我们能修。
-2. ★后端 **`RX_CODEC_DMA_RX_0` 打不开** —— 换任何前端都 `Error playing sample`、
-   内核无报错，而 WSA（扬声器）后端同一时刻正常。**原因未定论。**
+### A4. 耳机口不出声 ✅ 已修，待用户插一次耳机验收
+详见 [#40](stage4-findings.md)。**三个阻塞点，全部定位并修复**，内核侧一点没缺。
 
-**第一步（不要先改策略）**：拿内置救援 Ubuntu 做对照 —— 同内核、同固件、同拓扑，
-而 ALSA/UCM 在那边是原生的。
-* Ubuntu 下能出声 → 责任在 Android 侧，我们能修；
-* Ubuntu 下也不出声 → 内核/拓扑层面，别在 Android 侧继续投入。
-本仓 s2idle 就是这样定性的，成本很低。
+1. **RX 插值器链从来没接上** —— 这是"后端打不开"的真凶。我原先只设了
+   `RX_MACRO RXn MUX`，而 rx-macro 内部还有一级插值器停在默认值
+   （`RX INTn_1 MIX1 INP0 = ZERO`、`RX INTn DEM MUX = NORMAL_DSM_OUT`、
+   `CLSH/LO Switch = Off`）。DAPM 路径不完整 → PCM open 失败，**内核不打任何日志**。
+   补齐 9 个控件后当场通：`tinyplay -D 0 -d 0` rc=0、`pcm0p` `state: RUNNING`、
+   hw_ptr 2 秒前进 48960 帧/秒（实时 48 kHz）。
+   ⚠️ 我为此下过的错结论（"拓扑缺 APM 图 / soundwire 没上电 / q6apm 静默失败"）
+   三个候选一个都不是 —— 案卷里保留了它是怎么错的。
+2. **策略里没声明耳机设备** → 已加 `WIRED_HEADPHONE` / `WIRED_HEADSET` /
+   `IN_WIRED_HEADSET`（`CARD_0_DEV_0` / `_2`）。
+3. **框架找的是 `/sys/class/switch/h2w`，本机 ENOENT** →
+   `config_useDevInputEventForAudioJack = true`，改从 evdev 取
+   `SW_HEADPHONE_INSERT`。那个 input 设备本来就在、而且已经在被读。
+
+配方来源：救援 Ubuntu 上的上游 ALSA UCM2 —— **上游用
+`Regex "HUAWEI.*MateBook E.*"` 把本机直接 include 成 ThinkPad X13s**。
+★ 方法论：本机凡是 LPASS 音频的事，先去抄那个目录，别自己推 DAPM 图。
+
+**构建前已用 overlayfs 在设备上验过**：45 个控件零失败、策略被 audioserver 接受
+（三个新端口带地址出现在 `dumpsys media.audio_policy`）、扬声器无回归。
+**仍需用户做的**：新 ROM 起来后插一次耳机 —— 框架资源只能构建期 overlay，
+且 `WiredAccessoryManager` 在 SystemServer 启动时只读一次，框架层也没有
+插拔模拟命令可用。
 
 ### A5. 恢复出厂设置不起作用
 设置里那条路走 misc 的 BCB + recovery，而本机没有可用 recovery
@@ -122,6 +135,17 @@ mock 报的 skin/battery SHUTDOWN 阈值只有 **36 °C**，而
 让这件事不再紧迫，但它仍是本机最胖的一块。
 ⚠️ 别把它换掉 —— recovery 给不了 `sgdisk`/`resize2fs`/sshd，而这轮重新分区
 正是靠它远程完成的。
+
+### B8. `invalid volume index range in the curve` ×12（既有，非回归）
+每次 audioserver 启动都吐 12 条 `E APM_AudioPolicyManager: invalid volume index
+range in the curve:`（后面是空的，连哪条曲线都没说）。
+**确认与耳机改动无关**：干净 A/B，旧策略 12 条、新策略 12 条。
+来源应在 `audio_policy_volumes.xml` / `default_volume_tables.xml`（两份都是从
+`frameworks/av/services/audiopolicy/config/` 原样拷的）与本机 `devicePorts`
+的交集上。目前没有可观测的功能损害，故只记不修。
+
+**第一步**：给那条日志找出打印点（`EngineBase`/`VolumeCurve`），看它校验的是
+哪个字段，再对照我们装进去的两份 XML。
 
 ---
 

@@ -826,9 +826,10 @@ shutdown，不是 `LOG(FATAL)`**，所以 `init_fatal_panic` 覆盖不到，psto
 
 ---
 
-## #40 耳机口不出声：内核侧完全就绪，卡在后端 RX_CODEC_DMA_RX_0 打不开（2026-08-20）
+## #40 ★耳机口不出声 —— 已解决：RX 插值器链从未接上 + 框架找的是不存在的 h2w（2026-08-20）
 
-用户报告耳机接口不能用。实测下来是**两个独立的阻塞点**，而且第二个不是改配置能解决的。
+用户报告耳机接口不能用。实测下来是**三个独立的阻塞点**，全部已定位并修复；
+内核侧一点没缺。⚠️ 下面「阻塞点 2」保留了我当时下的错结论与它是怎么错的，因为那个误判很典型。
 
 ### 内核侧是完全好的 —— 这点先说清，别再去查它
 
@@ -858,54 +859,133 @@ shutdown，不是 `LOG(FATAL)`**，所以 `init_fatal_panic` 覆盖不到，psto
 logcat 里 `WiredHeadsetManager: ACTION_HEADSET_PLUG event, plugged in: false`。
 → 即使底层能出声，框架也永远不会往那边路由。**这一条我们自己能修。**
 
-### ★ 阻塞点 2（更硬）：后端 `RX_CODEC_DMA_RX_0` 打不开
+### ★ 阻塞点 2（已解决 2026-08-20）：RX **插值器链**从来没接上
 
-整条混音器通路可以被完整配置起来 —— 全部接受写入并能回读：
-
-```
-RX HPH Mode      CLS_H_INVALID -> CLS_H_LOHIFI
-RX_MACRO RX0/RX1 MUX   ZERO -> AIF1_PB
-HPHL/HPHR_RDAC Switch  Off  -> On
-HPHL/HPHR Switch       Off  -> On
-RX_CODEC_DMA_RX_0 Audio Mixer MultiMedia1  Off -> On
-```
-
-但 `tinyplay … -d 0`（MultiMedia1）返回 **`Error playing sample`**，
+**先记原始症状**，因为它极具误导性：整条混音器通路都能配起来、全部能回读，
+但 `tinyplay … -d 0`（MultiMedia1）返回 `Error playing sample`，
 `/proc/asound/card0/pcm0p/sub0/status` 保持 `closed`，
-而**内核一条错误都没有**（`dmesg` 里只有传感器那边的 `Handover signaled` 噪声）。
+而**内核一条错误都没有**。
 
-**干净的 A/B 把责任定位到后端**：
-* 把已知能用的前端 **MultiMedia2** 从 WSA 后端改接到 RX 后端
-  （`tinymix 202 0 0` + `tinymix 204 1 1`）→ **同样 `Error playing sample`**。
-* 恢复 WSA 路由后，同一个前端、同一个文件**立刻又能播**。
-→ 所以失败与前端无关，是 **`RX_CODEC_DMA_RX_0` 这个后端本身开不起来**。
+当时那个 A/B 是对的、但不完整：把已知能用的前端 **MultiMedia2** 从 WSA 后端
+改接到 RX 后端，**同样失败**；恢复 WSA 后同一个文件立刻又能播。
+这正确地把责任定位到了「RX 这条链」，但我由此下的结论
+（"后端 `RX_CODEC_DMA_RX_0` 本身开不起来，原因无定论，候选是拓扑缺 APM 图 /
+soundwire 没上电 / q6apm 静默失败"）**是错的** —— 三个候选一个都不是。
 
-两个 PCM 的能力**完全相同**（48 kHz / 2ch / S16_LE / period 480–16320），
-所以不是格式不匹配；两个 PCM 当时都是 `closed`，也不是被占用（EBUSY）。
+**真凶：我配的通路中间断了一节。** 我只设了 `RX_MACRO RX0/RX1 MUX = AIF1_PB`
+就以为数据能走到 HPH，实际 rx-macro 内部还有一级**插值器（interpolator）**，
+它的输入选择器和解调器输出都停在默认值：
 
-### 还不知道的部分（不要假装知道）
+```
+RX INT0_1 MIX1 INP0 = ZERO             ← 插值器混音器没有选任何输入
+RX INT1_1 MIX1 INP0 = ZERO
+RX INT0 DEM MUX     = NORMAL_DSM_OUT   ← 解调器没切到 class-H 输出
+RX INT1 DEM MUX     = NORMAL_DSM_OUT
+CLSH Switch         = Off              ← class-H 本身没开
+LO Switch           = Off
+RX_HPH PWR Mode     = ULP
+RX_COMP1/2 Switch   = Off
+```
 
-为什么后端开不起来 —— **没有定论**。候选：
-1. 华为那份 `audioreach-tplg.bin` 里可能没有这条路径的 **APM 图**
-   （DAPM 控件来自拓扑，所以"控件存在"不等于"图存在"）；
-2. RX 侧 soundwire/时钟/电源域在播放启动时没被真正拉起；
-3. q6apm 的 graph open 失败但没打日志。
+DAPM 路径不完整 → 后端 DAI 拿不到有效通路 → PCM open 失败。
+**内核不为此打任何日志**，这就是为什么它看起来像"后端坏了"。
 
-### ★ 建议的第一步：拿救援 Ubuntu 做对照
+补齐后当场通了（同一台机、同一个内核、同一份拓扑，只多设了 9 个控件）：
 
-本机有一个**同内核、同固件、同拓扑**的 Linux（内置救援 Ubuntu），而 ALSA/UCM
-在那边是原生的。判据很干净：
+| 判据 | 修之前 | 修之后 |
+|---|---|---|
+| `tinyplay -D 0 -d 0` | `Error playing sample` | **rc=0**，正常排空 |
+| `pcm0p/sub0/status` | `closed` | **`state: RUNNING`** |
+| `hw_ptr` 2 秒增量 | — | 141119 → 239039 = **48960 帧/秒**（正好实时 48 kHz）|
+| dmesg | 无 | 无（零报错）|
 
-* **Ubuntu 下耳机能出声** → 拓扑与内核都没问题，责任在 Android 侧
-  （策略缺设备 + 我们打开后端的方式不对）→ 我们能修。
-* **Ubuntu 下也不出声** → 内核/拓扑层面的问题，属上游或需要华为拓扑的逆向
-  → 不要在 Android 侧继续投入。
+hw_ptr 按实时速率前进是关键判据 —— 它证明 DMA 在**真实消耗**数据，
+不是"打开了但空转"。
 
-这条对照本仓做过同类的（s2idle 就是这样定性成内核/EC 缺陷的），成本很低。
+### ★ 配方的来源：上游 ALSA UCM2，而且上游本来就把本机当 X13s
+
+不用猜控件顺序。救援 Ubuntu 上 `/usr/share/alsa/ucm2/Qualcomm/sc8280xp/`
+就有官配，而 `sc8280xp.conf` 里明写
+
+```
+Regex "HUAWEI.*MateBook E.*"  →  include LENOVO-X13s.conf
+```
+
+**上游把华为 MateBook E 和 ThinkPad X13s 视为同一套配置**（拓扑固件同理）。
+耳机那份配方分散在四个 include 里，缺一节就是上面那个症状：
+
+* `codecs/wcd938x/HeadphoneEnableSeq.conf` —— RDAC / HPH / **CLSH / LO** / `RX HPH Mode CLS_H_ULP`
+* `codecs/qcom-lpass/rx-macro/HeadphoneEnableSeq.conf` —— **插值器那 6 条** + PWR Mode + COMP
+* `codecs/qcom-lpass/rx-macro/init.conf` —— `RX_RXn Digital Volume 84`
+* `Qualcomm/sc8280xp/LENOVO-X13s.conf` BootSequence —— `HPHL/HPHR Volume 2`
+
+存档在 `docs/` 之外没必要，但**方法论值得记**：本机凡是 LPASS 音频的事，
+先去救援 Ubuntu 的 UCM2 目录抄，别自己推 DAPM 图。
+映射也在那里：耳机 `hw:0,0`、扬声器 `hw:0,1`、耳机麦 `hw:0,2`、内置麦 `hw:0,3`。
+
+### ★ 阻塞点 3（原先没看见）：框架走的是 `/sys/class/switch/h2w`，本机没有
+
+策略里加了 `WIRED_HEADPHONE` / `WIRED_HEADSET` / `IN_WIRED_HEADSET` 之后还不够。
+`WiredAccessoryManager` 有两条获知插拔的路：默认那条是 legacy switch class
+—— 打开 `/sys/class/switch/h2w` 收 uevent。**本机 `ls /sys/class/switch/` 是
+ENOENT**（主线没有 h2w 驱动，也不会有），所以框架从来就不知道插孔存在。
+
+开关在框架资源 `config_useDevInputEventForAudioJack`（设备上
+`cmd overlay lookup android android:bool/config_useDevInputEventForAudioJack`
+实名核实 = `false`）。设成 true 后它改从普通 evdev switch 设备取
+`SW_HEADPHONE_INSERT` / `SW_MICROPHONE_INSERT` —— 而这个源**本来就在、
+而且已经在被读**：`dumpsys input` 里那个设备的 `Classes` 是
+`KEYBOARD | SWITCH`，还挂着活的 `Switch Input Mapper`。
+**内核侧一点没缺，缺的只是这一个 bool。**
+
+### 落地的三处改动
+
+| 改动 | 文件 |
+|---|---|
+| `config_useDevInputEventForAudioJack = true` | `overlay/frameworks/base/core/res/res/values/config.xml` |
+| 三个可插拔设备端口 + 路由（`CARD_0_DEV_0` / `_2`）| `audio/primary_audio_policy_configuration.xml` |
+| 耳机 + 耳机麦的完整使能序列 | `bin/audio-route.sh` |
+
+设备端口刻意**不进 `attachedDevices`**（可插拔设备由框架在插入时连接），
+且**显式写 profile** 而不是留空 —— 扬声器留空能行是因为它开机就 attached，
+可插拔设备留空会让策略在连接时去问 HAL，那是条没验证过的路；
+48 kHz / stereo / S16_LE 是实测跑通的配置。
+
+**构建前已在设备上用 overlayfs 验过的部分**（这一步值得做，策略 XML 解析失败会让
+整个音频挂掉，不该等两小时构建完才发现）：
+* `audio-route.sh` 三段共 45 个控件全部应用，**零个"设置失败"**；
+* 重启 audioserver 后策略被接受，`dumpsys media.audio_policy` 里三个新端口
+  连地址一起认下（`{AUDIO_DEVICE_OUT_WIRED_HEADPHONE, @:CARD_0_DEV_0}`）；
+* 扬声器回归正常（PCM1 仍 `state: RUNNING`）。
+* ⚠️ `E APM_AudioPolicyManager: invalid volume index range in the curve` **不是
+  我引入的**：干净 A/B，旧策略 12 条、新策略 12 条，完全相同。是既有噪声，另记待办。
+
+**仍未验证的一环**：`config_useDevInputEventForAudioJack` 是框架资源，
+只能构建期 overlay，且 `WiredAccessoryManager` 在 SystemServer 启动时读一次，
+所以端到端（插入 → 框架切路由 → 耳机出声）必须等新 ROM + 真的插一次耳机。
+框架层也没有可用的插拔模拟命令（`cmd audio help` 里没有任何 device/connect/jack）。
+
+### ⚠️ HPH 音量的方向不能猜 —— 从内核算
+
+上游把 `HPHL/HPHR Volume` 设成 **2**，而默认是 **24**（range 0→24）。
+到底哪边响？查驱动：
+
+```
+sound/soc/codecs/wcd938x.c:2620
+  SOC_SINGLE_TLV("HPHL Volume", WCD938X_HPH_L_EN, 0, 0x18, 1, line_gain)
+sound/soc/codecs/wcd938x.c:192
+  DECLARE_TLV_DB_SCALE(line_gain, -3000, 150, 0)
+```
+
+→ 控件值 v 对应 **−30 + 1.5·v dB**。所以**默认的 24 = +6 dB**（满增益直接进耳朵），
+上游的 **2 = −27 dB**。耳机灵敏度远高于喇叭，衰减是对的，框架自己还有一层音量。
+交叉验证同一份配方里的 `ADC2 Volume 10`：`analog_gain = MINMAX(0, 3000)` over
+0→20 → 10 = **+15 dB** 麦克风增益，也合理 —— 说明这个读法是对的。
+**嫌小就往上调，每 +1 = +1.5 dB；别接近 24。**
 
 ### 顺带记两个会误导人的点
 
 * `tinymix contents` **不是这个版本的子命令**（报 `Invalid mixer control: contents`）。
   列控件用不带参数的 `tinymix`。我第一次因此得出"没有 HPH 控件"的错误结论。
-* `HPHL/HPHR Volume` 的 **24 就是最大值**（range 0→24）。
-  调试时先压到 8 左右再开通路，否则耳机里会很吵。
+* `tinymix` **可以直接用带空格的控件名**（`tinymix 'CLSH Switch' 1`），
+  不必像早期脚本那样用控件编号。用名字更好 —— **编号会随内核/拓扑变化而漂移**。
