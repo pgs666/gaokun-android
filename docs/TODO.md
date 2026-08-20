@@ -148,13 +148,16 @@ mock 报的 skin/battery SHUTDOWN 阈值只有 **36 °C**，而
 **第一步**：在一台可牺牲的机器（或本机，数据已备份）上真跑一次。
 在那之前，"别人能装"这件事是未经验证的。
 
-### B5. 发版流程固化成脚本
-本轮踩到：`m bacon` 与 `m superimage` **分两次调用**会让 build.prop 时间戳不同，
-于是 OTA 包与安装用的 super 变成两个构建、互相不认（甚至构成降级）。
-正解是一次 `m bacon superimage`。
+### B5. 发版流程固化成脚本 ✅ 已做
+[`scripts/release.sh`](../scripts/release.sh)。它存在的理由是里面那几条断言，
+每一条都对应一次真实事故：**一次 `m bacon superimage`**（分两次调用会得到两个
+build stamp，OTA 包与安装用的 super 互不相认）、**清单 `timestamp` 必须等于
+`ro.build.date.utc`**（否则装上后 Updater 永远显示"有更新"）、
+**产物先传、清单最后传**。另外加了一条本轮新学到的：
+**boot.img 里的 kernel sha256 必须与 `prebuilt-boot/vmlinuz.efi` 相同**。
 
-**第一步**：把发版的三步（一次构建 → 校验戳一致 → 产物先传清单最后传）
-写成 `scripts/release.sh`，把这次的三项核对变成断言。
+`--stage-only` 把产物传到 `staging/<ver>/` 而不更新 `ota/gaokun3.json` ——
+可以先在自己机器上验一版而不惊动任何用户。**发布是对外动作，应该是显式的一步。**
 
 ### B6. GPU SMMU 中断根治
 实际 DT 是全局 672/673、context bank 从 678 起；而硬件拉的是 675/680，
