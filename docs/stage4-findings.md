@@ -991,6 +991,47 @@ sound/soc/codecs/wcd938x.c:192
   不必像早期脚本那样用控件编号。用名字更好 —— **编号会随内核/拓扑变化而漂移**。
 
 
+### ★ 顺带查出：内置麦克风一直是**完全断的**，而且谁都没发现（2026-08-21）
+
+修完耳机之后顺手把两条采集通路也测了 —— 结果内置麦压根打不开：
+
+```
+tinycap -D 0 -d 3   →  cannot open device 3 for card 0
+tinypcminfo -d 3    →  连能力都查不到（"Device does not exist"）
+```
+
+而音频策略里 `Built-In Mic` 声明的正是 `CARD_0_DEV_3`。**也就是说这台机器
+自始至终不能录音，只是没人试过。**
+
+根因和耳机是同一类：**前端混音器没接**
+（`MultiMedia4 Mixer VA_CODEC_DMA_TX_0` = Off），再加上 va-macro 的 DMIC
+使能序列一条都没设。我之前只补了耳机麦那条（MultiMedia3），漏了这条。
+补齐上游 `SectionDevice."Mic"` 的 `va-macro/DMIC0EnableSeq.conf` +
+`DMIC1EnableSeq.conf` 之后当场好：`tinycap -c 2` 录到 384000 帧、
+`pcm3c` `state: RUNNING`、安静房间 **RMS 981 = −30.5 dBFS**
+（近满幅样本只有 4 个瞬态）—— 是真实音频，不是静音也不是直流。
+
+⚠️★ **两个采集 PCM 都只支持双声道**（`tinypcminfo`: `channels min=2 max=2`）。
+传 `-c 1` 得到的是 `cannot set hw params: Invalid argument` ——
+我一度因此认为**耳机麦也是坏的**，其实它一直是好的，换成 `-c 2` 立刻录到
+384000 帧。⚠️ 判断"某条通路坏了"之前先看它宣告的能力。
+
+耳机麦的数据符合"没插耳机"：RMS 25 = −62.3 dBFS、峰值 640、**51.3% 精确零**
+（开路输入的样子）。要判它到底好不好，得插一副带麦的耳机。
+
+### 与上游 UCM 刻意不同的两处（记下来免得以后当成漏配）
+
+* `SpkrLeft/Right BOOST Switch`：**我们 0，上游 1**。功放升压器一使能，
+  每次流起停都有明显爆音（2026-08-19 A/B 盲听定案）。
+* `SpkrLeft/Right VISENSE Switch`：**我们 1，上游 0**。现状出声正常、
+  dmesg 无抱怨，故未动；但这是个**未验证的偏离**，将来查扬声器功耗或
+  保护逻辑时先看这里。
+
+另两处查过是**已经一致**的，不用设：`WSA MODE` 默认就是上游的 0；
+`WSA_RXn Digital Volume` 本机范围是 `0->81` 且已在 81（最大），
+而上游写的 `84` 在本机是**超范围值**。
+
+
 ## #41 ★Venus 硬件视频编解码：内核这一半已打通并实机验证（2026-08-21）
 
 `/dev/video0` = `qcom-venus-decoder`、`/dev/video1` = `qcom-venus-encoder`，

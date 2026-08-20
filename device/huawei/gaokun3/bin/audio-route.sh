@@ -109,3 +109,49 @@ set --     "MultiMedia3 Mixer TX_CODEC_DMA_TX_3" 1     "ADC2_MIXER Switch" 1    
 apply "$@"
 
 log -t audioroute "耳机麦路由已应用（PCM2 / TX）"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 内置麦克风（PCM 3 / VA_CODEC_DMA_TX_0 → MultiMedia4）
+#
+# ★ 2026-08-21：这条通路此前【完全是断的】，而且谁都没发现 —— 音频策略里
+#   Built-In Mic 声明的是 CARD_0_DEV_3，但那个 PCM 压根打不开：
+#     tinycap -D 0 -d 3  →  "cannot open device 3 for card 0"
+#     tinypcminfo -d 3   →  连能力都查不到（"Device does not exist"）
+#   原因和耳机口是同一类：**前端混音器没接**
+#   （`MultiMedia4 Mixer VA_CODEC_DMA_TX_0` = Off），再加上 va-macro 的
+#   DMIC 使能序列一条都没设。DAPM 路径不完整 → 后端拿不到通路 → open 失败。
+#   我之前只设了耳机麦那条（MultiMedia3），漏了内置麦这条。
+#
+# 补齐后实测：`tinycap -D 0 -d 3 -c 2 -r 48000` 录到 384000 帧，
+# pcm3c `state: RUNNING`，安静房间 **RMS 981 = -30.5 dBFS**（健康电平，
+# 近满幅样本只有 4 个瞬态），确认是真实音频而不是静音或直流。
+#
+# ⚠️ 这两个采集 PCM 都**只支持双声道**（tinypcminfo: channels min=2 max=2）。
+#    传 `-c 1` 会得到 "cannot set hw params: Invalid argument" ——
+#    我一度因此以为耳机麦也是坏的，其实它一直是好的。
+#
+# 序列来自上游 UCM 的 SectionDevice."Mic"：
+#   codecs/qcom-lpass/va-macro/DMIC0EnableSeq.conf 与 DMIC1EnableSeq.conf
+set -- \
+    "MultiMedia4 Mixer VA_CODEC_DMA_TX_0" 1 \
+    "VA DEC0 MUX" VA_DMIC \
+    "VA DMIC MUX0" DMIC0 \
+    "VA_AIF1_CAP Mixer DEC0" 1 \
+    "VA_DEC0 Volume" 100 \
+    "VA DEC1 MUX" VA_DMIC \
+    "VA DMIC MUX1" DMIC1 \
+    "VA_AIF1_CAP Mixer DEC1" 1 \
+    "VA_DEC1 Volume" 100
+apply "$@"
+
+log -t audioroute "内置麦路由已应用（PCM3 / VA / DMIC0+1）"
+
+# ⚠️ 与上游 UCM 刻意不同的两处，记下来免得以后当成漏配：
+#   * `SpkrLeft/Right BOOST Switch` 我们是 0，上游是 1 ——
+#     功放升压器一使能，每次流起停都有明显爆音（2026-08-19 A/B 盲听定案）。
+#   * `SpkrLeft/Right VISENSE Switch` 我们是 1，上游是 0 ——
+#     现状实测出声正常、dmesg 无抱怨，故未动；但这是个未验证的偏离，
+#     若将来查扬声器功耗或保护逻辑，先看这里。
+#   另两处查过是【已经一致】的，不用设：`WSA MODE` 默认就是上游的 0；
+#   `WSA_RXn Digital Volume` 本机范围是 0->81 且已在 81（最大），
+#   上游写的 84 在本机是超范围值。
