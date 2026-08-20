@@ -36,13 +36,14 @@ Everything below was measured on hardware, not inferred. The evidence is in
 | Wi-Fi | ✅ | ath11k / WCN6855 |
 | Bluetooth | ⚠️ | Works — `hci_qca`, adapter `ON`, zero crashes at boot. **But it can deadlock after long uptime**, together with audio; see [#38](docs/stage4-findings.md) |
 | Speakers | ⚠️ | Works — user-confirmed, WSA883x via audioreach. **But audio can deadlock after long uptime**, together with Bluetooth; see [#38](docs/stage4-findings.md) |
-| Headphone jack / microphone | ❌ | Tested. The kernel side is fine — insertion is detected and the codec even measures the headphone impedance — but the `RX_CODEC_DMA_RX_0` backend refuses to open, with any frontend and no kernel error, while the speaker backend works. Android also declares no headphone device in its audio policy at all. [#40](docs/stage4-findings.md) |
+| Headphone jack | ⚠️ | **Fixed, awaiting a user with headphones.** Three separate blockers, none of them exotic: the RX macro's interpolator stage was never wired up (input mux and demodulator mux both at reset values), so the DAPM route was incomplete and the backend refused to open — with no kernel message at all. Then the audio policy declared no wired output, and `WiredAccessoryManager` was watching `/sys/class/switch/h2w`, which does not exist on mainline. Measured after the fix: PCM 0 `RUNNING`, DMA consuming 48960 frames/s. [#40](docs/stage4-findings.md) |
+| Headset microphone | ⚠️ | Mixer path configured from the same upstream UCM recipe; never exercised |
 | Battery, charging, lid switch | ✅ | Huawei EC driver |
 | **Gaming** | ✅ | Genshin Impact at max graphics, smooth. GPU idles at 270 MHz, peaks 690 MHz, 50 °C |
 | CPU thermal throttling | ✅ | Mainline DTS has **no** CPU cooling maps at all — fixed in [`patches/0009`](patches/) |
 | **Suspend / standby** | ❌ | s2idle **resumes into a reset**. Kernel/EC bug — reproduces identically under Ubuntu |
-| Sensors (accel + gyro) | ✅ | **Auto-rotate works, confirmed on device.** A sensors HAL written for this port feeds real accelerometer and gyroscope data to SensorService, and the framework derives Game Rotation Vector / Gravity / Linear Acceleration from them. The factory mount matrix is all zeros (that calibration data died with Windows), but the sensor frame turns out to match the panel, so no correction was needed. This machine has **no magnetometer** (so no compass), and enabling the ALS poisons the DSP session — see [#37](docs/stage4-findings.md) |
-| Hardware video decode | ❌ | Venus not enabled; 66 software codecs only |
+| Sensors (accel + gyro) | ✅ | **Auto-rotate works, confirmed on device.** A sensors HAL written for this port feeds real accelerometer and gyroscope data to SensorService, and the framework derives Game Rotation Vector / Gravity / Linear Acceleration from them. The factory mount matrix is all zeros (that calibration data died with Windows), but the sensor frame turns out to match the panel, so no correction was needed. This machine has **no magnetometer** (so no compass), and enabling the ALS poisons the DSP session. The ALS failure is now narrowed to one difference: a field-by-field comparison against the working accelerometer rules out the PMIC rail (both use the same one) and chip-pin interrupts (both use one), leaving the SLPI-side I²C instance — 1 for the accelerometer, 5 for the light sensor. See [#37](docs/stage4-findings.md), [#43](docs/stage4-findings.md) |
+| Hardware video decode | ⚠️ | **Kernel half done** — `/dev/video0` and `/dev/video1` are `qcom-venus-decoder` / `qcom-venus-encoder`, all suppliers resolved, no firmware errors. As far as we know a first for SC8280XP. Android still needs a Codec2 component to talk to V4L2, so all 66 decoders remain software. [#41](docs/stage4-findings.md) |
 | Camera | ❌ | Not started |
 | USB-C DisplayPort / UCSI | ❌ | UCSI PPM init times out — a known mainline defect on this machine |
 | Fingerprint, TPM | ❌ | No driver exists |
@@ -181,9 +182,14 @@ What follows is the curated subset worth someone's weekend.
 
 Concrete, well-scoped work, roughly easiest first:
 
-1. **Hardware video decode.** Eight Venus patches exist in
-   `refs/linux-gaokun/patch sets/media/` and are *not* applied by the buildbot.
-   All 66 current codecs are software.
+1. **Hardware video decode — the Android half.** The kernel half is done:
+   `/dev/video0` and `/dev/video1` are a working Venus decoder and encoder.
+   What is missing is a Codec2 component that talks to V4L2, so all 66 codecs
+   are still software. `external/v4l2_codec2` is already in the manifest, and
+   three prerequisites are confirmed on device: the `IComponentStore/default`
+   instance it wants is free, `media.c2.hal.selection` is already `aidl`, and
+   ⚠️ the poolmask must be BLOB `0xfc0000`, **not** the `0xf50000` its README
+   suggests — that value is for ION, and this kernel has none.
 2. **GPU SMMU interrupt fix.** The SMMU asserts SPI 675/680; the device tree
    declares 678/679, so context faults never reach the CPU. A DTB change should
    remove the need for the `smmu-nostall.sh` polling workaround entirely.

@@ -1100,6 +1100,14 @@ mount -t efivarfs none /data/local/tmp/efivars   → rc=0，列出 78 个变量
 写法：4 字节属性（`NV|BS|RT` = `0x07`，小端）+ 条目名的 UTF-16LE + 双字节 NUL。
 覆盖已存在的变量前要 `chattr -i`。
 
+★**而且机制我们 Stage 0 就写下来了，只是没把它和 Android 联系起来** ——
+`docs/hw-inventory.md` 第 8 节原文：本机的 EFI 变量走**高通 TrustZone 的
+`uefisecapp` 后端**，不依赖 EFI 运行时服务（dmesg 里同时有
+`EFI runtime services will be disabled.` 和 `efivars: Registered efivars
+operations`），所以 `efi=noruntime` **不影响**变量读写。
+M4/M6 那个"Android 写不了"的判断，其实与本仓自己的记录是矛盾的 ——
+教训是**跨阶段的结论要回头对一遍旧案卷**，不然会重新发明一个错误。
+
 **为什么这条重要**：它让 Android **自己**就能安排"下一次启动进救援系统"，
 而且是 oneshot —— 失败会自动回落到 `default`。这正是"远程优先"缺的最后一块。
 本轮就靠它安全地试了 Venus 内核：`default` 全程保持已知可用的 slot_b 不动，
@@ -1116,14 +1124,22 @@ oneshot 指向临时条目；万一新内核起不来，一次断电就回到能
 有了上面的 oneshot 能力，正解是：让 HAL 只镜像槽位、把 `default` 留给救援系统，
 或者干脆改用 oneshot。已记入 TODO。
 
-### ⚠️ toybox 的 `mount` 要求 `/etc/fstab` 存在
+### ⚠️ toybox 的 `mount` 报 `bad /etc/fstab` 其实是"你不是 root"
 
 `mount -t vfat /dev/block/by-name/esp DIR` 直接报
-`mount: bad /etc/fstab: No such file or directory` 并 rc=1，**即使参数完整**。
-本机 `/etc -> /system/etc` 且没有 `fstab`。`adb remount` 后
-`: > /system/etc/fstab` 造一个空文件即可。
-（`/mnt` 在 adb shell 里不可写，挂载点要放 `/data/local/tmp/` 下；
-且 **挂载与后续操作必须在同一次 `adb shell` 调用里**，命名空间不同。）
+`mount: bad /etc/fstab: No such file or directory` 并 rc=1，**即使参数完整**，
+非常容易让人去追 fstab。
+
+⚠️ **我确实为此下过一次错结论**（"toybox mount 要求 /etc/fstab 存在"）——
+因为我当时同时改了两个变量：造了空 fstab **并且**重新拿了 root。
+干净的 A/B（root 身份、把 fstab 移走）证明：**efivarfs 与 vfat 都照样 rc=0**。
+真正的原因是**非 root 挂载**时 toybox 会去查 fstab，查不到就报这句。
+`adb root` 之后重启会掉，每次重启都要重做
+（`setprop service.adb.root 1` 然后 `adb root`，见 M3）。
+
+顺带两条真的坑：`/mnt` 在 adb shell 里不可写，挂载点要放 `/data/local/tmp/` 下；
+**挂载与后续操作要在同一次 `adb shell` 调用里**（不同调用的挂载命名空间可能不同，
+不过实测挂载会保留下来，所以看到 `Device or resource busy` 是"已经挂上了"）。
 
 
 ## #43 光感 tcs3701 为什么不通：与能用的加速度计做逐字段对照（2026-08-21）

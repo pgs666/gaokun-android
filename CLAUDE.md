@@ -5,7 +5,111 @@
 在华为 MateBook E Go（Snapdragon 8cx Gen 3 / sc8280xp，代号 gaokun）上跑原生 AOSP，
 最终目标是能稳定运行 arm64 手游。
 
-**当前阶段：Stage 6 M13 完成 — ★内核已进入 OTA 范围并实机验收 13/13；★传感器开机自启（不再需要脚本）；★许可证转 GPL-3**（每次开工时更新这一行）
+**当前阶段：Stage 6 M14 完成 — ★耳机口通了（真凶是 RX 插值器链）；★Venus 内核侧打通（/dev/video0 = qcom-venus-decoder）；★推翻"Android 写不了 EFI 变量"**（每次开工时更新这一行）
+
+> **★★ Stage 6 M14（2026-08-21）：耳机口 + Venus 内核侧 + 一条运维能力翻案。**
+> 新 ROM 已构建、经**真实 OTA 通路**装进 slot_a 并验收 **25/26**
+> （唯一那条"失败"是我 logcat 窗口只取 40 行，混音器回读证明路由已生效）。
+> 构建戳 `1787243424`，内核 `#19`。
+>
+> ★**耳机口不出声，真凶是 RX 插值器链从来没接上** —— 不是"后端打不开"。
+> 我原先只设了 `RX_MACRO RXn MUX` 就以为通路成立，实际 rx-macro 内部还有一级
+> 插值器停在默认值（`RX INTn_1 MIX1 INP0 = ZERO`、`RX INTn DEM MUX =
+> NORMAL_DSM_OUT`、`CLSH/LO Switch = Off`）。DAPM 路径不完整 → 后端 DAI 拿不到
+> 有效通路 → PCM open 失败，而**内核不为此打任何日志**，所以看起来像后端坏了。
+> ⚠️ 我在 #40 里给的三个候选（拓扑缺 APM 图 / soundwire 没上电 / q6apm 静默失败）
+> **一个都不是**，案卷保留了它是怎么错的。
+> 补齐 9 个控件后实测：`tinyplay -D 0 -d 0` rc=0、`pcm0p` `state: RUNNING`、
+> **hw_ptr 2 秒前进 97920 帧 = 48960 帧/秒**（正好实时 48 kHz，证明 DMA 在真实
+> 消耗数据而不是空转）。**新镜像开机自动应用，无需手工**。
+> - 另外两处阻塞：策略里压根没声明耳机设备（已加 `WIRED_HEADPHONE` /
+>   `WIRED_HEADSET` / `IN_WIRED_HEADSET`，地址 `CARD_0_DEV_0` / `_2`）；
+>   框架 `WiredAccessoryManager` 找的是 `/sys/class/switch/h2w`，**本机 ENOENT**
+>   （主线没有 h2w 驱动），开关是框架资源 `config_useDevInputEventForAudioJack`。
+>   那个 evdev 插孔设备**本来就在、而且已经在被读**（`Classes: KEYBOARD | SWITCH`）。
+> - ★**配方来源：救援 Ubuntu 上的上游 ALSA UCM2** ——
+>   `sc8280xp.conf` 用 `Regex "HUAWEI.*MateBook E.*"` 把本机直接 include 成
+>   `LENOVO-X13s.conf`。**上游本来就把华为 MateBook E 与 ThinkPad X13s 视为同一套。**
+>   ★ 方法论：本机凡是 LPASS 音频的事，先去抄那个目录，别自己推 DAPM 图。
+> - ★ HPH 音量的方向**从内核算，不猜**：`wcd938x.c:2620`
+>   `SOC_SINGLE_TLV(..., 0x18, 1, line_gain)` + `:192 DB_SCALE(-3000, 150, 0)`
+>   → 控件值 v = −30+1.5v dB。**默认 24 = +6 dB**（满增益直接进耳朵），
+>   上游的 2 = −27 dB。交叉验证同配方里 `ADC2 Volume 10` = +15 dB 麦增益，合理。
+> - **仍需用户做一件事**：插一次耳机听。框架资源只能构建期 overlay，
+>   `WiredAccessoryManager` 在 SystemServer 启动时只读一次，框架层也没有
+>   插拔模拟命令（`cmd audio help` 里没有 device/connect/jack）。
+>
+> ★**Venus 硬件视频编解码：内核这一半打通了**（据我们所知 sc8280xp 首次）。
+> `/dev/video0` = `qcom-venus-decoder`、`/dev/video1` = `qcom-venus-encoder`，
+> `aa00000.video-codec` 绑 `qcom-venus`、`abf0000.clock-controller` 绑
+> `sm8350-videocc`，供应方（videocc / IOMMU / rpmhpd / 4 条 interconnect）
+> 全部解析，延迟 probe 队列空，**固件加载失败 0 行**。
+> - ★**固件我们一直在装，只是名字骗了我**：`firmware-name` 指向
+>   `qcvss8280.mbn`，而 README 里那一行当初被我标成"语音服务（未用到）"
+>   —— **VSS = Video SubSystem，不是 Voice**。
+> - ★**时钟控制器主线已有**：`videocc-sm8350.c` 自己就认 `qcom,sc8280xp-videocc`。
+> - 8 个上游补丁打 7 个（0014 纯格式清理、主线已分叉，跳过）。
+>   compatible 选 `sc8280xp` 而非 `sm8350`：两个资源结构只差 `freq_tbl`，
+>   `sm8350_res` 借用 sm8250 的表，`sc8280xp_res` 才是本 SoC 自己的。
+> - ⚠️★ **必须关 `CONFIG_VIDEO_QCOM_IRIS`**，否则 Venus 编不过而**报错完全
+>   看不出跟它有关**（`sm8350_reg_preset` / `VPU_VERSION_IRIS2` undeclared，
+>   报在 core.c，像补丁打错）。主线 v7.2 用 `#if !IS_ENABLED(IRIS)` 把本机需要
+>   的资源全编掉了，而 iris 的 of_match 里**没有 sc8280xp**，永远服务不了本机。
+> - ⚠️★ 又是"=m 坑"，这次整条链上**五个**（`MEDIA_SUPPORT` / `VIDEO_DEV` /
+>   `VIDEOBUF2_DMA_CONTIG` / `V4L2_MEM2MEM_DEV` / `SM_VIDEOCC_8350`）。
+>   MUST_Y 断言 44 → 52 条。
+> - **还没做的另一半**：Android 需要一个跟 V4L2 说话的 Codec2 组件，
+>   66 个解码器仍全是软解。★ `external/v4l2_codec2` **本来就在 manifest 里**。
+>   ⚠️ poolmask 不能照抄它 README 的 `0xf50000`（那是 ION，本机**没有 ION**），
+>   要用 BLOB 的 `0xfc0000`。
+>
+> ★★**推翻 M4/M6：Android 上【能】写 EFI 变量。** cmdline 里确实有
+> `efi=noruntime`，但 `mount -t efivarfs` 挂得上、78 个变量读得出、
+> `LoaderEntryOneShot` **写得进且回读正确**（属性 `0x07` + UTF-16LE + 双 NUL；
+> 覆盖已存在的变量前要 `chattr -i`）。
+> ★ 机制**我们 Stage 0 就记下来了**（`hw-inventory.md` 第 8 节）：本机 EFI 变量走
+> 高通 TrustZone 的 `uefisecapp` 后端、不依赖 EFI 运行时服务，所以 `efi=noruntime`
+> 本来就不影响读写。M4/M6 那个判断与本仓自己的记录是矛盾的 ——
+> **跨阶段的结论要回头对一遍旧案卷**，否则会重新发明一个错误。
+> **意义：Android 自己就能安排"下次进救援系统"，而且是 oneshot，失败自动回落。**
+> 本轮就靠它安全地试了 Venus 内核和新槽位 —— `default` 全程保持已知可用的那个。
+> - ⚠️ 顺带查明：**boot_control HAL 每次启动都把 `default` 改成当前槽位**，
+>   于是 `INSTALL.md` 承诺的"挂死→拍电源键→自动回落到可远程接入的系统"
+>   **在首次进 Android 之后就静默失效了**。症状只是"`adb reboot` 本想去 Ubuntu
+>   却又回到 Android"。已记 TODO D4，正解是让 HAL 只管槽位、`default` 永远留救援。
+>
+> ★**死锁取证看门狗**（#38 用户报过但我们从未复现）。现实是死锁时用户只会重启、
+> 证据就没了，所以证据必须自动留下。探针刻意做得很便宜：**只读 `/proc` 线程状态、
+> 不跑 dumpsys**，60 秒一次；判据是**同一个 tid 连续三次采样都在 D**（≥2 分钟），
+> 不是"出现过 D"。命中后写 stack/wchan/QRTR 服务表/PCM 状态/binder 日志/logcat
+> 到 `/data/vendor/gaokun3/hangdump-<uptime>/`，每次启动只采一份。
+>
+> ★**光感收敛到一处嫌疑**（#43）。逐字段对照能用的加速度计：
+> ❌ 排除"DSP 够不到 PMIC 轨"（两者用**同一条** `/pmic/client/sensor_vddio`）；
+> ❌ "SLPI 用不了主 SoC TLMM 脚"也站不住（加速度计同样 `irq_is_chip_pin=1`）；
+> ★ 收敛到 **SLPI 侧 I2C 实例号 1（能用）vs 5（不通）**，
+> 这也正好解释"启用光感会污染整个 SSC 会话"。
+>
+> ⚠️**三个自己造成的坑，都值得记**：
+> 1. `boot_control/main.cpp` 删函数时留下多余花括号 → 构建 3 分钟就失败。
+>    本地编不了 Android 目标，至少要过一遍**花括号平衡体检**。
+> 2. ★**`make ... | tail -30` 之后取 `$?` 拿到的是 tail 的退出码** ——
+>    第一次内核构建报 `KBUILD_RC=0` 而 `drivers/media` 其实失败了。
+>    判据要看**产物时间戳**（`Image` 还停在旧的）。本仓在 az CLI 上记过同一个坑。
+> 3. ★**"toybox mount 要求 /etc/fstab"是错的** —— 干净 A/B（root 身份、把 fstab
+>    移走）证明 efivarfs 与 vfat 都照样 rc=0。真因是**非 root 挂载**时 toybox 会去
+>    查 fstab。我当时同时改了两个变量（造 fstab + 重新拿 root），所以归错了因。
+>    ⚠️ `adb root` 每次重启都要重做。
+>
+> ⚠️**`update_engine` 拒绝在 overlayfs（`adb remount`）生效时应用 OTA**
+> —— `ErrorCode::kOverlayfsenabledError (64)`。要先 `adb enable-verity`
+> （会报 `boot_b does not look like a vbmeta footer`，无害）**并重启**才生效。
+>
+> **发版已备好但【未发布】**：产物全部传到 R2 的 `staging/m14/`
+> （`super.img.zst` / `boot.img` / OTA zip / sha256 / gaokun3.json），
+> **`ota/gaokun3.json` 清单一字未动**，所以没有任何用户会收到。
+> 发布是对外动作，等用户定。发版说明草稿在
+> `scratchpad/relnotes-030.md`。
 
 > **★★ Stage 6 M13（2026-08-20）：按 Android 分区规范把内核纳入 OTA。**
 >
