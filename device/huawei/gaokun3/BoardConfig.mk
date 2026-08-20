@@ -27,17 +27,68 @@ TARGET_BOARD_PLATFORM     := sc8280xp
 TARGET_BOOTLOADER_BOARD_NAME := gaokun3
 
 # ------------------------------------------------------- 没有 bootloader
-# 本机是 UEFI + systemd-boot，不是 fastboot 设备。
-# kernel / ramdisk / dtb 由 systemd-boot 从 ESP 直接加载，
-# 所以不生成 boot.img，也没有 recovery 分区。
+# 本机是 UEFI + systemd-boot，不是 fastboot 设备，也没有 recovery 分区。
 TARGET_NO_BOOTLOADER := true
 TARGET_NO_RECOVERY   := true
-TARGET_NO_KERNEL     := true      # 内核在树外自己编（v7.2-rc2 + gaokun3 补丁）
 BOARD_USES_GENERIC_KERNEL_IMAGE := false
 
+# ★★ 2026-08-20 起【生成真的 boot.img】，并把 boot 纳入 A/B OTA 范围。
+#
+# 此前是 TARGET_NO_KERNEL := true —— 内核/ramdisk/dtb 是 ESP 上的裸文件，
+# 于是内核完全在 OTA 之外，换内核得手工拷。现在按 Android 分区规范来：
+# boot_a / boot_b 分区里放标准 Android boot 镜像，由 update_engine 直接刷。
+#
+# ⚠️ 但 UEFI/systemd-boot【读不了】Android boot 镜像，所以过渡期还要一步：
+#   OTA 的 postinstall 钩子用 gaokun3-bootimg-extract 把内核从刚刷好的
+#   boot_<目标槽> 解出来放到 ESP 上该槽的目录，systemd-boot 照旧启动。
+#   boot 分区因此是唯一真相源，ESP 上的文件只是派生物。
+#   自研的 EFI 加载器（读 misc 选槽 + 解析 boot 镜像）就位后这一步即可退役。
+#
+# 内核走 PRODUCT_OUT/kernel（device.mk 里用 PRODUCT_COPY_FILES 提供）——
+# 出处 build/make/core/Makefile:1009-1017：TARGET_NO_KERNEL != true 且
+# BOARD_KERNEL_BINARIES 为空时 INSTALLED_KERNEL_TARGET := $(PRODUCT_OUT)/kernel。
+TARGET_NO_KERNEL := false
+
+# ★ 告诉 Lineage 的 kernel.mk 用预置内核，不要去找内核源码树。
+#   （vendor/lineage/build/tasks/kernel.mk:159-163、166-204）
+# ⚠️ 必须用这个变量。kernel.mk 里另有一条"扫 PRODUCT_COPY_FILES 里 dest=kernel
+#   的项来识别预置内核"的分支，但那段写的是 `$(ifeq kernel,$(_dest), ...)`
+#   —— ifeq 不是 make 函数，整个 $(ifeq ...) 展开成空字符串，所以那条路
+#   【根本不生效】（kernel.mk:171-176，Lineage 自己的 bug）。
+#   只靠 PRODUCT_COPY_FILES 的结果是 "BOARD_KERNEL_IMAGE_NAME not defined"。
+# 设了它之后 kernel.mk 会把这个文件拷成 $(PRODUCT_OUT)/kernel
+#   （NEEDS_KERNEL_COPY），boot 镜像就用它。
+# 它会打印一句 "Using prebuilt kernel binary ... THIS IS DEPRECATED" ——
+# 对本机不适用：内核本来就必须在树外编（主线 + gaokun3 补丁栈）。
+TARGET_PREBUILT_KERNEL := device/huawei/gaokun3/prebuilt-boot/vmlinuz.efi
+
+# ★ 刻意用 header v2：一个分区就装齐 kernel + ramdisk + dtb。
+#   v3 及以上会把 dtb 与 vendor ramdisk 拆到 vendor_boot
+#   （board_config.mk:522-526 一旦 >=3 就进 vendor_boot 分支），
+#   对本机是纯粹的额外复杂度。
+BOARD_BOOT_HEADER_VERSION := 2
+BOARD_MKBOOTIMG_ARGS += --header_version $(BOARD_BOOT_HEADER_VERSION)
+# ⚠️ 变量名是 BOARD_INCLUDE_DTB_IN_BOOTIMG（BOOTIMG 连写，不是 BOOT_IMG）。
+#   写错了不会被忽略，而是报 "BOARD_PREBUILT_DTBIMAGE_DIR with
+#   BOARD_INCLUDE_DTB_IN_BOOTIMG != true is not supported"，
+#   而且这个错在 lunch 阶段就炸，表现成 "Don't have a product spec for"，
+#   非常容易误判成设备树没被 manifest 拉全。
+BOARD_INCLUDE_DTB_IN_BOOTIMG := true
+BOARD_PREBUILT_DTBIMAGE_DIR := device/huawei/gaokun3/prebuilt-boot/dtb
+# 定义这个变量就会打开 boot 镜像生成（board_config.mk:467-468）。
+# 内容约 27 MB（zboot 内核 13 + ramdisk 13 + dtb 0.17），64 MiB 留足余量。
+BOARD_BOOTIMAGE_PARTITION_SIZE := 67108864
+
 # ---------------------------------------------------------------- cmdline
-# 只用于记录；实际生效的是 systemd-boot BLS entry 的 options 行
-# （见 docs/stage2-plan.md 第 3 节）。两处必须保持一致。
+# ★ 现在它【会被嵌进 boot.img】，不再只是记录 —— 自研 EFI 加载器将来直接用它
+#   （槽位后缀由加载器按 misc 里的槽位自己追加，所以这里不写 slot_suffix）。
+#   过渡期实际生效的仍是 systemd-boot BLS 条目的 options 行，两处必须一致。
+#
+# ⚠️★ 2026-08-20 发现这两处早就漂移了 —— 此前 TARGET_NO_KERNEL=true，这个变量
+#   没有任何消费者，所以漂了也没人发现：这里原写 deferred_probe_timeout=30 而
+#   实际条目是 10，并且缺 androidboot.veritymode / flash.locked /
+#   verifiedbootstate 与 iommu.passthrough/strict 四项。已按实机在用的
+#   android-a.conf 逐项对齐。教训：没有消费者的配置一定会漂。
 #
 # [measured] boot_devices 来自
 #   /sys/devices/platform/soc@0/1c20000.pcie/pci0002:00/.../nvme/nvme0/nvme0n1
@@ -45,11 +96,13 @@ BOARD_USES_GENERIC_KERNEL_IMAGE := false
 # ⚠️ 绝对不要加 earlycon：强烈怀疑 earlycon=efifb 会挂死本机启动，
 #    见 docs/stage1-kernel-plan.md 第 1.0 节。
 BOARD_KERNEL_CMDLINE := \
+    androidboot.flash.locked=0 androidboot.verifiedbootstate=orange \
+    iommu.passthrough=0 iommu.strict=0 \
     androidboot.hardware=gaokun3 \
     androidboot.boot_devices=soc@0/1c20000.pcie \
-    androidboot.selinux=permissive \
+    androidboot.selinux=permissive androidboot.veritymode=disabled \
     firmware_class.path=/vendor/firmware/ \
-    init=/init printk.devkmsg=on deferred_probe_timeout=30 \
+    init=/init printk.devkmsg=on deferred_probe_timeout=10 \
     console=tty0 \
     clk_ignore_unused pd_ignore_unused arm64.nopauth efi=noruntime \
     fbcon=rotate:1 usbhid.quirks=0x12d1:0x10b8:0x20000000
@@ -114,13 +167,27 @@ BOARD_FLASH_BLOCK_SIZE := 262144
 #    $(SRC_TARGET_DIR)/product/virtual_ab_ota/launch.mk 设置。
 AB_OTA_UPDATER := true
 AB_OTA_PARTITIONS += \
+    boot \
     system \
     system_ext \
     product \
     vendor
 
-# 本机没有 boot 分区（内核/ramdisk 是 ESP 上的文件，由 systemd-boot 加载），
-# 所以 boot 不在 AB_OTA_PARTITIONS 里 —— 换内核走带外流程，见 docs/。
+# ★ boot 已在上面的列表里（2026-08-20）。它是标准 Android boot 镜像，
+#   由 update_engine 按规范直接刷进 boot_a / boot_b。
+#
+# ★ 但内核【已经进入 OTA 范围】（2026-08-20），走的是另一条路：
+#   Image / DTB / ramdisk 装进 vendor 分区（它在上面的列表里），payload 刷完后
+#   由 postinstall 钩子复制到 ESP 上目标槽位专属的目录 slot_a/ slot_b/。
+#   两个槽位的 BLS 条目永久指向各自目录，所以钩子只放文件、不改条目 ——
+#   绝不会碰到正在运行的那个槽，回滚也就天然安全。
+#
+# ⚠️ POSTINSTALL_OPTIONAL 故意设为 false：宁可整个 OTA 失败，也不能让某个槽
+#   位上出现"新 system + 旧内核"。最常见的失败原因是 ESP 空间不足
+#   （只有 300 MiB，两个槽各约 53 MiB），脚本会当场报出来。
+# ★ argv[1] 是目标槽位整数、argv[2] 是状态 fd —— 出处
+#   system/update_engine/payload_consumer/postinstall_runner_action.cc:355-357。
+AB_OTA_POSTINSTALL_CONFIG +=     RUN_POSTINSTALL_vendor=true     POSTINSTALL_PATH_vendor=bin/gaokun3-ota-postinstall.sh     FILESYSTEM_TYPE_vendor=ext4     POSTINSTALL_OPTIONAL_vendor=false
 
 # ----------------------------------------------------- Stage 3: 图形栈
 # 模板：device/linaro/dragonboard/shared/graphics/（db845c = 树内同款高通主线）。

@@ -52,3 +52,9 @@ device/huawei/gaokun3/adb_keys
 #    放在 etc/hexagonrpcd-empty-registry 受版本控制，免得别人克隆后忘了建。
 device/huawei/gaokun3/hexagonrpcd-root/**
 !device/huawei/gaokun3/hexagonrpcd-root/README.md
+
+# 树外内核的产物（Image / DTB），作为 prebuilt 供 device.mk 装进 vendor/boot/，
+# 好让内核跟着 OTA 走。二进制不入版本库；换内核时自己放进去。
+# ⚠️ 同 firmware/ 一样【整目录忽略 + 只放行 README.md】。
+device/huawei/gaokun3/prebuilt-boot/**
+!device/huawei/gaokun3/prebuilt-boot/README.md

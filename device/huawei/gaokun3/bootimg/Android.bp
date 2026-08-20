@@ -1,0 +1,19 @@
+// 从 Android boot 镜像里取出 kernel / ramdisk / dtb。
+// 过渡期部件：本机没有能读 boot 镜像的 bootloader，所以 OTA 的 postinstall
+// 钩子用它把内核从刚刷好的 boot_<槽> 解到 ESP 上，systemd-boot 照旧启动。
+// 自研 EFI 加载器就位后本程序可以退役（它的解析逻辑正好是加载器的参照）。
+cc_binary {
+    name: "gaokun3-bootimg-extract",
+    srcs: ["bootimg_extract.cpp"],
+    // ★ 也编 host 版：这样能在构建机上拿真 boot.img 当场验解包结果
+    //   （把解出的三个文件跟原件逐个对 sha256），不必先刷到设备上。
+    //   偏移抄错的典型后果是「magic 校验通过但内容错位」，只有对校验和才看得出来。
+    host_supported: true,
+    // ★ 直接用树内的 boot 镜像头定义，不手抄偏移
+    header_libs: ["bootimg_headers"],
+    vendor: true,
+    cflags: [
+        "-Wall",
+        "-Werror",
+    ],
+}

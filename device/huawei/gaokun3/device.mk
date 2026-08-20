@@ -462,3 +462,31 @@ PRODUCT_COPY_FILES += $(foreach f,$(wildcard $(LOCAL_PATH)/hexagonrpcd-root/sens
     $(f):$(TARGET_COPY_OUT_VENDOR)/etc/hexagonrpcd-root/sensors/config/$(notdir $(f)))
 PRODUCT_COPY_FILES += $(foreach f,$(wildcard $(LOCAL_PATH)/hexagonrpcd-root/socinfo/*),\
     $(f):$(TARGET_COPY_OUT_VENDOR)/etc/hexagonrpcd-root/socinfo/$(notdir $(f)))
+
+# ─── 让内核进入 OTA 范围 ───
+#
+# 按 Android 分区规范做：boot_a / boot_b 里放标准 Android boot 镜像（header v2，
+# 一个分区装齐 kernel+ramdisk+dtb），boot 已进 AB_OTA_PARTITIONS，由
+# update_engine 像刷别的分区一样刷。配置见 BoardConfig.mk。
+#
+# ⚠️ 过渡期多一步：UEFI + systemd-boot 【读不了】Android boot 镜像（它只会从
+#   ESP 按 BLS 条目加载文件）。所以 OTA 的 postinstall 钩子用
+#   gaokun3-bootimg-extract 把内核从【刚刷好的 boot_<目标槽>】解出来，放到
+#   ESP 上该槽专属的目录。boot 分区是唯一真相源，ESP 上的文件只是派生物 ——
+#   所以【不】把内核往 vendor 里塞一份，那只会让每个 payload 白背 26 MB。
+#   自研 EFI 加载器（读 misc 选槽 + 解析 boot 镜像）就位后这一步即可退役。
+
+# ★ 内核由 BoardConfig.mk 的 TARGET_PREBUILT_KERNEL 提供，Lineage 的 kernel.mk
+#   会把它拷成 $(PRODUCT_OUT)/kernel（构建系统认的名字，
+#   build/make/core/Makefile:1014），boot 镜像随即用它。
+# ⚠️★ 这里【不能】再用 PRODUCT_COPY_FILES 往 `kernel` 拷一份 —— 两条规则会撞：
+#   "overriding commands for target out/target/product/gaokun3/kernel,
+#    previously defined at build/make/core/Makefile:148"（实测踩到）。
+#   用的是 vmlinuz.efi（EFI_ZBOOT 自解压 PE，13 MB）而不是 Image（37 MB）：
+#   内核最终要落到只有 300 MiB 的 ESP 上，且两个槽位各存一份。
+
+PRODUCT_PACKAGES += \
+    gaokun3-bootimg-extract
+
+PRODUCT_COPY_FILES += \
+    $(LOCAL_PATH)/bin/gaokun3-ota-postinstall.sh:$(TARGET_COPY_OUT_VENDOR)/bin/gaokun3-ota-postinstall.sh
