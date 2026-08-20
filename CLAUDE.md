@@ -8,9 +8,11 @@
 **当前阶段：Stage 6 M14 完成 — ★耳机口通了（真凶是 RX 插值器链）；★Venus 内核侧打通（/dev/video0 = qcom-venus-decoder）；★推翻"Android 写不了 EFI 变量"**（每次开工时更新这一行）
 
 > **★★ Stage 6 M14（2026-08-21）：耳机口 + Venus 内核侧 + 一条运维能力翻案。**
-> 新 ROM 已构建、经**真实 OTA 通路**装进 slot_a 并验收 **25/26**
-> （唯一那条"失败"是我 logcat 窗口只取 40 行，混音器回读证明路由已生效）。
-> 构建戳 `1787243424`，内核 `#19`。
+> 新 ROM 经**真实 OTA 通路**（update_engine + postinstall + boot_control）装机验收。
+> **设备现在跑的是 slot_a、构建戳 `1787247612`、内核 `#19`，
+> 与 R2 上待发版的那一组产物完全同源。**
+> 四条音频通路**开机即用、零手工步骤**实测：耳机 PCM0 `RUNNING`、
+> 扬声器 PCM1 `RUNNING`、内置麦 PCM3 与耳机麦 PCM2 各录到 384000 帧。
 >
 > ★**耳机口不出声，真凶是 RX 插值器链从来没接上** —— 不是"后端打不开"。
 > 我原先只设了 `RX_MACRO RXn MUX` 就以为通路成立，实际 rx-macro 内部还有一级
@@ -105,11 +107,33 @@
 > —— `ErrorCode::kOverlayfsenabledError (64)`。要先 `adb enable-verity`
 > （会报 `boot_b does not look like a vbmeta footer`，无害）**并重启**才生效。
 >
-> **发版已备好但【未发布】**：产物全部传到 R2 的 `staging/m14/`
+> ★**内置麦克风此前【完全是断的】，而且谁都没发现**（#40 末尾）。
+> 策略里 `Built-In Mic` 指的是 `CARD_0_DEV_3`，而那个 PCM 压根打不开
+> —— 和耳机同一类：前端混音器没接（`MultiMedia4 Mixer VA_CODEC_DMA_TX_0` = Off）
+> 且 va-macro 的 DMIC 序列一条没设。补齐后安静房间 **RMS −30.5 dBFS**（健康电平）。
+> ⚠️ **两个采集 PCM 都只支持双声道**，传 `-c 1` 会得到 `cannot set hw params`
+> —— 我因此一度以为耳机麦也坏了，其实它一直是好的。
+>
+> ★**新缺陷 #44：WiFi 大流量下塌到 10 KB/s**（`ath11k` 的 `msdu_done` 丢帧）。
+> 链路指标完美（RSSI −35、11ax、2401 Mbps）却 45% 丢包；**负载触发**
+> （25 次全落在下载那几分钟）。**对用户走系统内 OTA 有实际影响。**
+> ⚠️ 诚实记一条相关性：出问题跑的是 #19、顺利那次是 #18，但**没有证据**
+> 说 Venus 导致了它 —— 第一步是在 #18 上复现同样的下载。
+> 绕过办法很实用：**R2 → 本机 → USB → 设备**，再
+> `update_engine_client --payload=file:///data/local/tmp/payload.bin`，
+> 实测 **76 秒**装完（走 WiFi 同样的包要二十多分钟）。
+> 五条链路的实测速度见 #44 的表。
+>
+> **发版已备好但【未发布】**：产物在 R2 的
+> `staging/crDroidAndroid-16.0-20260820-gaokun3-v12.11/`
 > （`super.img.zst` / `boot.img` / OTA zip / sha256 / gaokun3.json），
 > **`ota/gaokun3.json` 清单一字未动**，所以没有任何用户会收到。
-> 发布是对外动作，等用户定。发版说明草稿在
-> `scratchpad/relnotes-030.md`。
+> 发布是对外动作，等用户定；发版说明草稿在 `scratchpad/relnotes-030.md`。
+> ★ 发布用 `scripts/release.sh`（TODO B5 已做，本轮端到端跑通）。
+> ⚠️ 发那一版要带 **`--no-build`** —— build stamp 每次构建都变，重跑构建
+> 发出去的就不是验过的那一版。我今晚正是这么踩的：设备上验了 `1787246871`，
+> `release.sh` 又构建一次，staging 里成了 `1787247612`；
+> 收尾是把 `1787247612` 也装到机器上重验了一遍。
 
 > **★★ Stage 6 M13（2026-08-20）：按 Android 分区规范把内核纳入 OTA。**
 >
