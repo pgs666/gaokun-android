@@ -277,19 +277,25 @@ initrd     /$MID/android/slot_$s/ramdisk.img
 EOF
 done
 
-# One recovery entry per slot, derived from the Android entry so the cmdline
-# (slot_suffix included) can never drift apart from it. Recovery does not need
-# a different cmdline — the embedded one in recovery.img is byte-identical to
-# boot.img's; it is the ramdisk that makes it recovery.
-for s in a b; do
-    [ -f "/mnt/esp/$MID/android/slot_$s/recovery-ramdisk.img" ] || continue
-    sed -e "s|^initrd .*|initrd     /$MID/android/slot_$s/recovery-ramdisk.img|" \
-        -e "s|^title .*|title      Recovery (gaokun3) — slot _$s|" \
-        -e "s|^version .*|version    gaokun3-recovery-$s|" \
-        -e "s|^sort-key .*|sort-key   zzrecovery$s|" \
-        "/mnt/esp/loader/entries/$MID-android-$s.conf" \
-        > "/mnt/esp/loader/entries/$MID-recovery-$s.conf"
-done
+# ⚠️★ recovery 的启动项默认【不】创建。2026-08-20 实测这个 recovery ramdisk 在本机
+#   会进复位循环（Android 一次都没进），而且不留 panic 记录 —— 本机 init 的服务级
+#   失败是主动 reboot() 而非 panic，所以 init_fatal_panic + efi_pstore 抓不到。
+#   条目一旦存在，谁在 15 秒菜单里误选一次就得跑到机器旁按电源键。
+#   ramdisk 照样铺（无害，14 MB），将来验证通过再默认打开。
+#   要调试：ENABLE_RECOVERY_ENTRY=1 ./install-gaokun3.sh …
+if [ "${ENABLE_RECOVERY_ENTRY:-0}" = 1 ]; then
+  for s in a b; do
+      [ -f "/mnt/esp/$MID/android/slot_$s/recovery-ramdisk.img" ] || continue
+      sed -e "s|^initrd .*|initrd     /$MID/android/slot_$s/recovery-ramdisk.img|" \
+          -e "s|^title .*|title      Recovery (gaokun3) — slot _$s|" \
+          -e "s|^version .*|version    gaokun3-recovery-$s|" \
+          -e "s|^sort-key .*|sort-key   zzrecovery$s|" \
+          "/mnt/esp/loader/entries/$MID-android-$s.conf" \
+          > "/mnt/esp/loader/entries/$MID-recovery-$s.conf"
+  done
+else
+    echo "  (recovery boot entry skipped — known to reset-loop; set ENABLE_RECOVERY_ENTRY=1 to create it)"
+fi
 
 cat > "/mnt/esp/loader/entries/$MID-rescue.conf" <<EOF
 title      Linux rescue (gaokun3)

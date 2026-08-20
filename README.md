@@ -163,6 +163,7 @@ conclusions were later overturned. Several of them were.
 | Issue | Where |
 |---|---|
 | s2idle resume fails; the machine resets | [`docs/stage6-crdroid.md`](docs/stage6-crdroid.md) §M4 |
+| **No working recovery.** The image builds and ships, but booting it reset-loops the machine, so the boot entry is not created. Costs: no `adb sideload`, no `fastbootd`, and *Erase all data* in Settings probably does nothing (it asks the bootloader for recovery, and systemd-boot does not read that request) | [#39](docs/stage4-findings.md) |
 | **Audio and Bluetooth can deadlock after long uptime** — reported on device, not yet reproduced or diagnosed. Both ride the same QRTR/FastRPC path to the DSPs, where we have already measured session-level lockups | [#38](docs/stage4-findings.md) |
 | Sensors: the accelerometer reads correctly on Linux, but there is no Android HAL yet; enabling the ALS breaks the DSP session (#37) | [`docs/stage4-findings.md`](docs/stage4-findings.md) |
 | USB re-enumeration drops adb after unplug — use adb over TCP (#27) | [`docs/stage4-findings.md`](docs/stage4-findings.md) |
@@ -201,7 +202,14 @@ Concrete, well-scoped work, roughly easiest first:
    **ambient light sensor** is a harder, separate problem: enabling it returns
    no readings *and* poisons the whole SSC session, so there is no
    auto-brightness.
-7. **Camera.** Untouched.
+7. **Recovery that boots.** The image is built and delivered; it reset-loops.
+   ★ The useful first move is not more blind reboots — it is getting **USB adb
+   working inside recovery**, the only channel that can see anything (there is no
+   serial port, recovery has no network stack, and `init_fatal_panic` provably
+   cannot catch this class of failure on this device). [#39](docs/stage4-findings.md)
+   spells out what was already ruled out. Fixing this also gets `fastbootd` for
+   free and makes *Erase all data* work.
+8. **Camera.** Untouched.
 
 If you have a MateBook E Go and want to test, open an issue — reports of what
 breaks are as useful as patches. Please include your BIOS version and SKU.

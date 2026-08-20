@@ -743,3 +743,83 @@ libssc 退回的单位矩阵恰好与面板方向一致，**不需要在上层�
 * 音频死锁 → 播放/通话不可用，重启可恢复（未验证是否必须重启整机）。
 * 蓝牙死锁 → 外设断连、开关蓝牙无响应。
 * ⚠️ 对**游戏**的影响未知：如果只是音频输出停掉，游戏本身可能仍能玩。
+
+---
+
+## #39 recovery：镜像能造、能交付，但启动会复位循环（未解，且诊断手段在本机失效）
+
+**状态：卡住。** 记录下来是为了让接手的人不必重走这条路，尤其是不要再用
+`init_fatal_panic` 这条在本机注定无效的手段。
+
+### 已经做成的部分（这些是对的，可复用）
+
+* **构建**：`TARGET_NO_RECOVERY := false` + `BOARD_RECOVERYIMAGE_PARTITION_SIZE`
+  → 独立的 `recovery.img`（29,161,472 字节）。
+  ⚠️ 绝不能用 `BOARD_USES_RECOVERY_AS_BOOT`：`board_config.mk:463` 一看到它就把
+  `BUILDING_BOOT_IMAGE` 关掉，会推翻本机的 boot.img。改后已验证
+  `BUILDING_BOOT_IMAGE` 仍为 true。
+* ★**它的内核与 boot.img 里的 sha256 完全相同**（`8e55f776…`），dtb 也一样
+  → ESP 上不必再放一份内核，recovery 条目直接复用该槽的 `Image` 与 `gaokun3.dtb`，
+  只需多搬 14 MB 的 ramdisk。
+* ★**recovery 的内嵌 cmdline 与 boot 的逐字相同** —— 是 ramdisk 决定它是 recovery，
+  不需要特殊 cmdline。
+* **交付形态**：ramdisk 作为文件随 `vendor` 走 OTA，由 postinstall 钩子铺到 ESP。
+  于是**已装的机器一次普通 OTA 就能拿到**，不必像 `boot_a/boot_b` 那样重装
+  （安装器把剩余空间全给了 `userdata`，已装机器没有余地再切分区）。
+* **ramdisk 结构完好**（本地解包逐项核对）：`system/bin/recovery` 2,849,968、
+  `system/bin/init` 2,468,840、`/init` 是指向 `/system/bin/init` 的符号链接、
+  `system/etc/recovery.fstab` 2,257、`system/bin/adbd`、
+  `system/bin/update_engine_sideload` 都在，640 个条目，gzip cpio。
+  ★ `res/images/fastbootd.png` 在里面 —— 说明 fastbootd 本来是白送的。
+* **BLS 条目派生也是对的**：`bootctl list` 能正常列出
+  `Recovery (gaokun3) — slot _b`，`initrd` 指向的文件存在且大小正确。
+
+### 失败现象
+
+用 oneshot 启动 recovery 条目后**进入复位循环**，用户手动按电源键才回到 Android。
+
+关键观测：
+* **Android 一次都没进** —— `persist.sys.boot.reason.history` 在整个循环期间
+  没有新增条目（它只在 Android 启动时追加）。
+* **没有任何 panic 记录** —— `/sys/fs/pstore/` 空、EFI 变量里没有 `dmesg-*`。
+* `/data/misc/recovery/last_log` 与 `/cache/recovery/` 都是空的
+  → recovery 没有正常退出过。
+* `misc` 的 BCB 仍是 `boot-recovery`（recovery 完成动作才会清它）。
+
+### ⚠️ 为什么"加 init_fatal_panic 抓 panic"这条路在本机无效
+
+我试过给 recovery 条目加 `androidboot.init_fatal_panic=true panic=10`，
+指望把失败转成 panic 让 `efi_pstore` 抓到 —— **一无所获**。原因本仓早有记录
+（见"已知坑"）：**Android init 的服务级失败（`reboot_on_failure`）走的是正常
+shutdown，不是 `LOG(FATAL)`**，所以 `init_fatal_panic` 覆盖不到，pstore 里
+自然什么都没有。`panic=10` 也就无从触发。
+→ **别再重复这个实验。**
+
+### 本机的根本困难：没有任何早期启动的可观测通道
+
+* **没有串口**（硬件上就没引出）。
+* **recovery 里没有网络栈**（无 WiFi 驱动/supplicant），所以它不会出现在局域网上
+  —— 无法像 Android 那样用 adb over TCP 观察。
+* **USB adb 在本机是坏的**（#27），而 recovery 的 adbd 只走 USB。
+* pstore 这条路如上所述对这类失败无效。
+
+所以现在是"黑盒里循环"，而每次尝试都需要人到机器旁按电源键。
+
+### 建议的下一步（按性价比，都不要再盲试重启）
+
+1. ★**先把 USB adb 在 recovery 里弄通** —— 这是唯一能真正看见内部的通道。
+   #27 说的是"拔插后掉"，而全新启动时插着线可能是好的。判据很简单：
+   插好线启动 recovery，在主机上看 `adb devices` 有没有 `recovery` 状态的设备。
+   通了之后 `adb shell`、`/tmp/recovery.log` 全都能看，这个问题大概率当场就清楚。
+2. 若 USB 也不通，就**给 recovery 的 ramdisk 塞一个早期写盘的探针**
+   （我们控制这个 ramdisk）：在 `init.recovery.gaokun3.rc` 里挂 ESP 并
+   `echo` 阶段标记到文件。这样"走到哪一步"就能在事后从 ESP 上读出来。
+3. 也可以先用**最小 recovery**（`TARGET_RECOVERY_UI_LIB` 之类全不带）排除
+   图形/UI 初始化的可能 —— 我们连"是不是 minui 拿不到显示"都还不知道。
+
+### 现在的保护措施
+
+**默认不创建 recovery 启动项。** 条目一旦存在，谁在 15 秒菜单里误选一次就得
+跑到机器旁按电源键。ramdisk 照样铺（无害，14 MB，将来验证要用）。
+要调试：安装器 `ENABLE_RECOVERY_ENTRY=1`，OTA 钩子
+`setprop persist.gaokun3.recovery_entry 1`。

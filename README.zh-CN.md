@@ -149,6 +149,7 @@ Android 相关的配置断言在
 | 问题 | 位置 |
 |---|---|
 | s2idle 醒不回来，整机复位 | [`docs/stage6-crdroid.md`](docs/stage6-crdroid.md) §M4 |
+| **没有可用的 recovery。** 镜像能造能交付，但启动它会让机器进复位循环，所以启动项默认不创建。代价：没有 `adb sideload`、没有 `fastbootd`，设置里的"恢复出厂设置"大概不起作用（它是去请求 bootloader 进 recovery，而 systemd-boot 不读那个请求）| [#39](docs/stage4-findings.md) |
 | **音频与蓝牙在长期运行后可能死锁** —— 用户实机报告，尚未复现定位。两者都走同一条到 DSP 的 QRTR/FastRPC 通路，而那条通路上我们已经实测到过会话级卡死 | [#38](docs/stage4-findings.md) |
 | 传感器：Linux 侧加速度计已能正确读数，但 Android 侧尚无 HAL；使能光感会弄坏 DSP 会话（#37） | [`docs/stage4-findings.md`](docs/stage4-findings.md) |
 | 拔插 USB 后 adb 不重枚举，用 adb over TCP 兜底（#27） | [`docs/stage4-findings.md`](docs/stage4-findings.md) |

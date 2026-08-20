@@ -128,17 +128,29 @@ currently running — which is what makes rollback safe.
 If the hook fails (the usual reason is a full ESP), the whole update fails
 loudly rather than leaving you with a new system and an old kernel.
 
-## Recovery
+## Recovery — built, but it does not boot yet
 
-Pick **Recovery** from the 15-second boot menu. It is a normal Android recovery,
-so `adb sideload` and `fastbootd` work from there.
+There is **no working recovery on this device.** The image is built and shipped
+(the ramdisk lands on the ESP), but booting it reset-loops the machine, so the
+boot menu entry is **deliberately not created**. See
+[#39](stage4-findings.md) for what was measured and ruled out.
 
-⚠️ `adb reboot recovery` and *Erase all data* in Settings do **not** reach it yet.
-Those go through the bootloader control block in `misc`, and systemd-boot does
-not read it — the request lands nowhere. Use the boot menu instead. (Wiring the
-BCB up is possible and planned; the catch is that these kernels boot with
-`efi=noruntime`, so Android cannot set systemd-boot's one-shot EFI variable and
-the default entry has to be swapped and then restored.)
+What that costs you today:
+
+* No `adb sideload`. Not a big loss — updates come through Settings, and the
+  rescue Linux can write any partition directly.
+* No `fastbootd`.
+* ⚠️ **Erase all data in Settings probably does nothing.** That path writes
+  `boot-recovery` into the bootloader control block in `misc` and reboots,
+  expecting the bootloader to hand control to recovery. systemd-boot does not
+  read that block, so the request lands nowhere — and indeed `misc` on a running
+  device still has a stale `boot-recovery` sitting in it. To wipe `/data`, do it
+  from the rescue Linux: `mkfs.ext4 -F /dev/disk/by-partlabel/userdata`.
+
+If you want to debug it, `ENABLE_RECOVERY_ENTRY=1` makes the installer create
+the entry, and `persist.gaokun3.recovery_entry=1` makes the OTA hook create it.
+⚠️ Be at the machine when you do: recovering from the loop needs the power
+button.
 
 ## If it will not boot
 

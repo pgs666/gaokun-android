@@ -94,7 +94,17 @@ if [ -f "$REC_SRC" ]; then
         #   是 ramdisk 决定它是 recovery。
         SRC_ENT="$MNT/loader/entries/$MID-android-$SUFFIX.conf"
         DST_ENT="$MNT/loader/entries/$MID-recovery-$SUFFIX.conf"
-        if [ -f "$SRC_ENT" ]; then
+        # ⚠️★ 默认【不】创建 recovery 启动项 —— 2026-08-20 实测这个 ramdisk 在本机
+        #   会进复位循环（Android 一次都没进，启动原因历史里没有新条目），
+        #   而且不留 panic 记录（本机 init 的服务级失败是主动 reboot() 而不是
+        #   panic，所以 init_fatal_panic + efi_pstore 抓不到）。
+        #   条目一旦存在，用户在 15 秒菜单里误选一次就要跑到机器旁按电源键 ——
+        #   在验证通过之前不能把这个坑发出去。
+        #   要调试就设 persist.gaokun3.recovery_entry=1 再触发一次 OTA/部署。
+        if [ "$(getprop persist.gaokun3.recovery_entry 2>/dev/null)" != "1" ]; then
+            log "recovery 启动项按默认跳过（未验证会复位循环）；"
+            log "  要调试请 setprop persist.gaokun3.recovery_entry 1"
+        elif [ -f "$SRC_ENT" ]; then
             sed -e "s|^initrd .*|initrd     /$MID/android/slot_$SUFFIX/recovery-ramdisk.img|" \
                 -e "s|^title .*|title      Recovery (gaokun3) — slot _$SUFFIX|" \
                 -e "s|^version .*|version    gaokun3-recovery-$SUFFIX|" \
