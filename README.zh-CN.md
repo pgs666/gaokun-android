@@ -36,7 +36,7 @@ recovery 分区，也没有串口。这不是一次常规移植 —— 它是 **
 | **游戏** | ✅ | 原神画质极高流畅。GPU 空闲 270 MHz、峰值 690 MHz、最高 50 °C |
 | CPU 温控降频 | ✅ | 主线 DTS **根本没有** CPU 的 cooling map —— 已由 [`patches/0009`](patches/) 在设备树里根治 |
 | **待机 / 挂起** | ❌ | s2idle **挂得下去、醒不回来**，随后整机复位。内核/EC 缺陷 —— Ubuntu 下同样复现 |
-| 传感器 | ⚠️ | **加速度计与陀螺仪现在能在 Android 内部正确读出**（经 SLPI DSP，Z≈9.88 m/s²、accuracy=3）。缺的是喂给 SensorService 的 AIDL HAL，所以自动旋转**还没接上**。本机没有磁力计；光感一使能就会污染整个 DSP 会话 |
+| 传感器（加速度计+陀螺仪）| ⚠️ | **整条打通**：为本机写的 sensors HAL 已把真实读数喂给 SensorService，框架据此自动融合出 Game Rotation Vector / Gravity / Linear Acceleration。自动旋转已接上，但**轴向还没标定** —— 出厂安装矩阵全零，旋转方向可能是反的。本机**没有磁力计**（所以没有指南针）；光感一使能就会污染整个 DSP 会话 |
 | 硬件视频解码 | ❌ | Venus 未启用；66 个编解码器全是软解 |
 | 摄像头 | ❌ | 没开始 |
 | USB-C 外接显示 / UCSI | ❌ | UCSI PPM 初始化超时，本机主线的已知缺陷 |

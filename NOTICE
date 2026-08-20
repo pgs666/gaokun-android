@@ -19,6 +19,13 @@ Licensing summary
       https://codeberg.org/dylanvanassche/libssc), and the client code is a
       reimplementation of that protocol, so it inherits GPL-3.0-or-later.
       The protocol itself is documented in docs/sensors-ssc-protocol.md.
+* device/huawei/gaokun3/sensors-hal/ (the AIDL sensors HAL):
+      Mixed. Sensor.cpp / Sensors.cpp / main.cpp and the headers under
+      include/sensors-impl/ are adapted copies from AOSP
+      (hardware/interfaces/sensors/aidl/default), Apache-2.0, with their
+      copyright headers intact. SscHub.{h,cpp} is ours. Because the binary
+      links the GPL-3.0 SSC client, the resulting executable is
+      GPL-3.0-or-later.
 * external/hexagonrpc (fetched by the local manifest, not vendored here):
       GNU General Public License v3.0, upstream linux-msm/hexagonrpc
 * Proprietary firmware for this device (Huawei .mbn / .jsn / audioreach

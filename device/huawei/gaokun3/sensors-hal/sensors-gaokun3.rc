@@ -1,0 +1,8 @@
+# 传感器 HAL。依赖 hexagonrpcd 先把 SSC 拉起来（它是 class core，先于 hal）。
+# ★ 不需要 "required" 之类的强依赖：SscHub 自己会重试等待，
+#   而且 hexagonrpcd 起来后 SSC 还要约 20 秒沉降 —— 强依赖也等不到。
+service vendor.sensors-gaokun3 /vendor/bin/hw/android.hardware.sensors-service.gaokun3
+    class hal
+    user system
+    group system
+    rlimit rtprio 10 10

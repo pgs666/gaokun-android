@@ -1,0 +1,49 @@
+// gaokun3 的 sensors HAL —— 把 SLPI 上的传感器喂给 SensorService。
+//
+// ★ 这是 hardware/interfaces/sensors/aidl/default 的【改造副本】（Apache-2.0，
+//   版权头原样保留），不是从零写的。为什么必须复制而不能继承：
+//     * 那个 Sensors 类的传感器列表在【构造函数体里】硬加，而 mSensors 是 private；
+//     * libsensorsexampleimpl 的 visibility 只放行 hardware/interfaces 的
+//       子包，设备树链不了它。
+//   改了三处：传感器列表收敛为 accel+gyro、两个 readEventPayload 换成真数据、
+//   SensorInfo 写上真名字。其余原样。详见 README.md。
+//
+// 数据来自 SscHub（GPL-3.0）→ libgaokun3ssc → QMI/QRTR → SLPI。
+// 因此本模块整体按 GPL-3.0-or-later 发布，NOTICE 里有记录。
+
+cc_binary {
+    name: "android.hardware.sensors-service.gaokun3",
+    relative_install_path: "hw",
+    vendor: true,
+    init_rc: ["sensors-gaokun3.rc"],
+    vintf_fragments: ["sensors-gaokun3.xml"],
+    srcs: [
+        "main.cpp",
+        "Sensors.cpp",
+        "Sensor.cpp",
+        "SscHub.cpp",
+    ],
+    local_include_dirs: ["include"],
+    shared_libs: [
+        "libbinder_ndk",
+        "liblog",
+    ],
+    static_libs: [
+        "android.hardware.common-V2-ndk",
+        "android.hardware.common.fmq-V1-ndk",
+        "android.hardware.sensors-V3-ndk",
+        "android.system.suspend-V1-ndk",
+        "libbase",
+        "libcutils",
+        "libfmq",
+        "libgaokun3ssc",
+        "libpower",
+        "libprotobuf-cpp-lite",
+        "libutils",
+    ],
+    cflags: [
+        "-Wall",
+        // 上游那份副本自带一些告警，不为它开 -Werror
+        "-Wno-unused-parameter",
+    ],
+}

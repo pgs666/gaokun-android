@@ -232,7 +232,7 @@ message SscAccelerometerResponse {
 | VFS 根 → `/vendor/etc/hexagonrpcd-root` | ✅ 已进 `device.mk` |
 | **QRTR 服务 400** | ✅ **上线**（node 9 port 13）|
 | QMI/protobuf 客户端 | ✅ **已实现并实测通过** —— `device/huawei/gaokun3/ssc/`，Android 上读出 `accel` Z≈9.88 m/s² accuracy=3、`gyro` 静止≈0 rad/s |
-| AIDL `android.hardware.sensors` HAL | ⬜ 未开始 |
+| AIDL `android.hardware.sensors` HAL | ✅ **已实现并实机验证** —— `device/huawei/gaokun3/sensors-hal/`（AOSP 默认实现的改造副本）|
 | sepolicy | ⬜ 未写（当前 SELinux permissive，将来转 enforcing 时必须补）|
 
 ## ★ 本规格已被实现验证（2026-08-20）

@@ -442,6 +442,11 @@ PRODUCT_PACKAGES += \
 PRODUCT_PACKAGES += \
     gaokun3-ssc-test
 
+# sensors HAL（sensors-hal/，AOSP 默认实现的改造副本）。
+# 它一上来 SensorService 就能看到加速度计与陀螺仪 —— 自动旋转由此生效。
+PRODUCT_PACKAGES += \
+    android.hardware.sensors-service.gaokun3
+
 # VFS 根 → /vendor/etc/hexagonrpcd-root/（路径由上游 rc 的 -R 决定，别改名）
 # ★ 空 registry 是整套的关键：DSP 找不到覆盖值就用默认值（=全部传感器启用）。
 #   它 0 字节且专有目录被 gitignore，所以单独放在 etc/ 受版本控制，
