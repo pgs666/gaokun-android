@@ -70,6 +70,19 @@ jobs:
             ccache-gaokun3-${{ github.event.inputs.kernel_tag }}-
             ccache-gaokun3-
 
+      - name: Configure kernel from extracted Android config
+        working-directory: linux
+        run: |
+          mkdir -p ../kernel-out
+          cp ../gaokun-android/device/huawei/gaokun3/prebuilt-boot/android-7.2.0-rc2-gaokun3.config ../kernel-out/.config
+          scripts/config --file ../kernel-out/.config --enable EFI_ZBOOT
+          make O=../kernel-out ARCH=arm64 olddefconfig
+
+      - name: Verify Himax driver is built-in
+        run: |
+          grep '^CONFIG_TOUCHSCREEN_HIMAX_HX83121A_SPI=' kernel-out/.config
+          test "$(grep '^CONFIG_TOUCHSCREEN_HIMAX_HX83121A_SPI=' kernel-out/.config)" = "CONFIG_TOUCHSCREEN_HIMAX_HX83121A_SPI=y"
+
       - name: Build kernel
         working-directory: linux
         run: |
@@ -77,17 +90,7 @@ jobs:
           export CC="ccache aarch64-linux-gnu-gcc"
           export CROSS_COMPILE="aarch64-linux-gnu-"
           export CXX="ccache aarch64-linux-gnu-g++"
-          mkdir -p ../kernel-out
-          make O=../kernel-out ARCH=arm64 gaokun3_defconfig
-          bash ../gaokun-android/scripts/kernel-config-android.sh ../kernel-out
-          scripts/config --file ../kernel-out/.config --enable EFI_ZBOOT
-          make O=../kernel-out ARCH=arm64 olddefconfig
           make O=../kernel-out ARCH=arm64 -j"$(nproc)"
-
-      - name: Verify Himax driver is built-in
-        run: |
-          grep '^CONFIG_TOUCHSCREEN_HIMAX_HX83121A_SPI=' kernel-out/.config
-          test "$(grep '^CONFIG_TOUCHSCREEN_HIMAX_HX83121A_SPI=' kernel-out/.config)" = "CONFIG_TOUCHSCREEN_HIMAX_HX83121A_SPI=y"
 
       - name: Print artifact info
         run: |
