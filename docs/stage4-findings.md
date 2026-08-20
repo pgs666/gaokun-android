@@ -671,7 +671,9 @@ Mount matrix provided by firmware is all 0, falling back to identity matrix!
 | 光感读数 | ❌ 使能即污染会话，未解 |
 | 出厂校准 / 安装矩阵 | ❌ 随 Windows 永久丢失 |
 | **Android 侧管道** | ✅ **已打通**（2026-08-20）：hexagonrpcd 在 Android 上运行，**QRTR 服务 400 上线**（node 9 port 13）。工具 `tools/qrtr-lookup/` |
-| **Android 侧 sensors HAL** | ⬜ 仍不存在 —— 协议规格已整理成 [`sensors-ssc-protocol.md`](sensors-ssc-protocol.md)（含线格式、TLV、消息 ID、坑），照它实现即可 |
+| **Android 侧读数** | ✅ **已通**（2026-08-20）：自研客户端 `device/huawei/gaokun3/ssc/` 在 Android 上读出 `accel` Z≈9.88 m/s² accuracy=3、`gyro` 静止≈0 rad/s。规格见 [`sensors-ssc-protocol.md`](sensors-ssc-protocol.md) |
+| 本机传感器清单（SSC 亲口回答）| `accel` ✅ / `gyro` ✅ / `mag` ❌ **本机无磁力计** / `rotv` ❌ 未注册 / `ambient_light` ❌ 污染会话 |
+| **AIDL sensors HAL** | ⬜ 仍不存在 —— 这是自动旋转真正落地前最后一块 |
 
 ⚠️ 另有两个环境坑（都会浪费大量时间）：
 * `droid-juicer` 会**无限 `openat("/usr/share/droid-juicer/configs")` 死循环**

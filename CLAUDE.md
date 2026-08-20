@@ -5,7 +5,34 @@
 在华为 MateBook E Go（Snapdragon 8cx Gen 3 / sc8280xp，代号 gaokun）上跑原生 AOSP，
 最终目标是能稳定运行 arm64 手游。
 
-**当前阶段：Stage 6 M10 — ★传感器管道在 Android 上打通（QRTR 服务 400 上线）；剩 QMI 客户端 + AIDL HAL，协议规格已写全**（每次开工时更新这一行）
+**当前阶段：Stage 6 M11 — ★★Android 里直接读到加速度计与陀螺仪（Z≈9.88，accuracy=3）；只剩 AIDL HAL 没写**（每次开工时更新这一行）
+
+> **★★ Stage 6 M11（2026-08-20）：Android 侧传感器读数打通。**
+>
+> ★**自研客户端一次跑通**（`device/huawei/gaokun3/ssc/`，实机 Android）：
+> ```
+> 传感器 accel 的 UID = 61ab5376b4a5c9aa58442ede47acd316
+>   X=-0.086191 Y= 0.052672 Z= 9.883265  accuracy=3
+> ```
+> Z≈9.88 = 重力，accuracy **3**（最高）。这条链路 = QRTR lookup → QMI 组包
+> → protobuf → SUID 查找 → 使能 → 解读数，**就是 sensors HAL 逻辑的 90%**。
+> - ★**陀螺仪也通了**（静止各轴≈0 rad/s，accuracy=3）。**Linux 侧从未验证过**
+>   —— 那边装的 `ssccli` 压根不支持 gyro。于是不只自动旋转，**游戏体感/陀螺仪
+>   瞄准**也有了基础。
+> - ★**本机传感器清单（SSC 亲口回答，不是推测）**：`accel` ✅、`gyro` ✅、
+>   **`mag` ❌ 没有磁力计**（所以没有指南针）、`rotv` ❌ 未注册（多半要磁力计）、
+>   `ambient_light` ❌ 污染会话。⚠️ `mag`/`rotv` 查询失败**不会**污染会话。
+> - ★**协议规格 `docs/sensors-ssc-protocol.md` 已被实现验证** —— 里面的线格式
+>   （7 字节 service_header + TLV 的 u16 长度前缀）、消息 ID、哨兵 UID 全对，
+>   后人可以照抄不必再逆向。libssc **不能移植**（glib/gobject/libqmi），但
+>   `.proto` 只有几百行、AOSP 自带 protoc → 重写便宜得多。
+> - ⚠️ 两个构建坑：①`proto: { canonical_path_from_root: false }` 必须加，否则
+>   生成的头带全仓库前缀、`.proto` 之间的 import 也解析不了；
+>   ②**protobuf 要静态链接** —— `libprotobuf-cpp-lite.so` 只在 `/system/lib64`
+>   且文件名带版本号，vendor 命名空间看不见（`tinymix`/`libtinyalsa` 同一个坑）；
+>   静态版又引用 `__android_log_write`，所以还得补 `shared_libs: ["liblog"]`。
+> - ⬜ **只剩 AIDL `android.hardware.sensors` HAL**。要额外处理：安装矩阵全零
+>   （轴向得实机对着屏幕标定一次）、采样率/batching/flush 语义、sepolicy。
 
 > **★★ Stage 6 M10（2026-08-20）：传感器管道在 Android 上打通。**
 >
@@ -40,7 +67,8 @@
 >   AOSP 在 `build/soong/Android.bp:56` 就用 `kernel_headers` 类型定义了它。
 >   我建了空壳导致构建报 `module already defined` —— 因为当时**只 grep 了
 >   `device/` 目录**。判断"树里有没有这个模块"要 grep 全树。
-> - ⚠️ 又被同一个转义坑咬了两次（`` / `
+> - ⚠️ 又被同一个转义坑咬了两次（`
+` / `
 ` 被中间层 collapse 掉，一次把真 CR
 >   写进文档、一次让生成的 python 字符串断行）。**结论固化进脚本注释：
 >   生成代码时一律用 `chr()`，不写反斜杠转义。**

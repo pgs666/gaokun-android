@@ -231,11 +231,28 @@ message SscAccelerometerResponse {
 | `hexagonrpcd`（AOSP 构建）| ✅ 已编出并运行，DSP 20 秒内发来 2880 行文件请求 |
 | VFS 根 → `/vendor/etc/hexagonrpcd-root` | ✅ 已进 `device.mk` |
 | **QRTR 服务 400** | ✅ **上线**（node 9 port 13）|
-| QMI/protobuf 客户端 | ⬜ **本文档就是给它写的规格** |
+| QMI/protobuf 客户端 | ✅ **已实现并实测通过** —— `device/huawei/gaokun3/ssc/`，Android 上读出 `accel` Z≈9.88 m/s² accuracy=3、`gyro` 静止≈0 rad/s |
 | AIDL `android.hardware.sensors` HAL | ⬜ 未开始 |
 | sepolicy | ⬜ 未写（当前 SELinux permissive，将来转 enforcing 时必须补）|
 
-**下一个可验证的增量**：写一个独立的命令行客户端（对标 Linux 上的 `ssccli`），
-跑通「SUID 查找 → 使能 → 打印 X/Y/Z」。它验证的正是 HAL 逻辑的 90%，
-而且不需要碰 AIDL、不需要 SensorService，失败时容易定位。
-成功之后再把它包成 HAL。
+## ★ 本规格已被实现验证（2026-08-20）
+
+`device/huawei/gaokun3/ssc/` 按本文档实现了客户端，**在 Android 上一次跑通**：
+
+```
+SSC 服务 400 在 node 9 port 13
+传感器 accel 的 UID = 61ab5376b4a5c9aa58442ede47acd316
+  X=-0.086191 Y= 0.052672 Z= 9.883265  accuracy=3
+```
+
+也就是说本文档里的线格式（7 字节头、TLV 的 u16 长度前缀）、消息 ID、
+哨兵 UID 全部正确 —— **可以照抄，不必再逆向**。
+
+各 data_type 的实测结果：`accel` ✅、`gyro` ✅（Linux 侧从未验证过）、
+`mag` ❌ 本机无磁力计（SSC 明确回答"没有传感器提供"）、
+`rotv` ❌ 未注册（多半需要磁力计）、`ambient_light` ❌ 污染会话。
+⚠️ `mag`/`rotv` 的查询失败**不会**污染会话，与 `ambient_light` 不同。
+
+**下一个增量**：AIDL `android.hardware.sensors` HAL —— 把 `libgaokun3ssc`
+包起来喂 SensorService。额外要处理的：安装矩阵全零（轴向要实机标定一次）、
+采样率/batching/flush 语义、sepolicy。

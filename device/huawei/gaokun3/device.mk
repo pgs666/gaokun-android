@@ -436,6 +436,12 @@ PRODUCT_PACKAGES += \
 PRODUCT_PACKAGES += \
     gaokun3-qrtr-lookup
 
+# SSC 客户端 + 命令行验证工具（ssc/）。实测已能从 Android 直接读出
+# 加速度计（Z≈9.88，accuracy=3）与陀螺仪 —— 这是 sensors HAL 逻辑的 90%。
+# 将来的 AIDL HAL 直接链 libgaokun3ssc 静态库。
+PRODUCT_PACKAGES += \
+    gaokun3-ssc-test
+
 # VFS 根 → /vendor/etc/hexagonrpcd-root/（路径由上游 rc 的 -R 决定，别改名）
 # ★ 空 registry 是整套的关键：DSP 找不到覆盖值就用默认值（=全部传感器启用）。
 #   它 0 字节且专有目录被 gitignore，所以单独放在 etc/ 受版本控制，

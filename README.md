@@ -41,7 +41,7 @@ Everything below was measured on hardware, not inferred. The evidence is in
 | **Gaming** | ✅ | Genshin Impact at max graphics, smooth. GPU idles at 270 MHz, peaks 690 MHz, 50 °C |
 | CPU thermal throttling | ✅ | Mainline DTS has **no** CPU cooling maps at all — fixed in [`patches/0009`](patches/) |
 | **Suspend / standby** | ❌ | s2idle **resumes into a reset**. Kernel/EC bug — reproduces identically under Ubuntu |
-| Sensors (accelerometer, ALS) | ⚠️ | The accelerometer **is** readable on mainline — proven on this machine through the SLPI DSP (Z≈9.87 m/s² at rest). There is no Android HAL yet, so no auto-rotate *in Android* yet. The ALS is a different story: enabling it poisons the DSP session |
+| Sensors | ⚠️ | **Accelerometer and gyroscope now read correctly from inside Android** through the SLPI DSP (Z≈9.88 m/s², accuracy 3). What is missing is the AIDL HAL that feeds SensorService, so auto-rotate is not wired up *yet*. No magnetometer exists on this machine, and enabling the ALS poisons the DSP session |
 | Hardware video decode | ❌ | Venus not enabled; 66 software codecs only |
 | Camera | ❌ | Not started |
 | USB-C DisplayPort / UCSI | ❌ | UCSI PPM init times out — a known mainline defect on this machine |

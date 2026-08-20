@@ -13,6 +13,14 @@ Licensing summary
       GNU General Public License v2.0 only, as derivative works of Linux
 * Patches under patches/ that apply to Mesa:
       MIT, matching upstream Mesa
+* device/huawei/gaokun3/ssc/ (the Snapdragon Sensor Core client):
+      GNU General Public License v3.0 or later. The .proto files are taken
+      verbatim from libssc (Copyright (C) 2022-2026 Dylan Van Assche,
+      https://codeberg.org/dylanvanassche/libssc), and the client code is a
+      reimplementation of that protocol, so it inherits GPL-3.0-or-later.
+      The protocol itself is documented in docs/sensors-ssc-protocol.md.
+* external/hexagonrpc (fetched by the local manifest, not vendored here):
+      GNU General Public License v3.0, upstream linux-msm/hexagonrpc
 * Proprietary firmware for this device (Huawei .mbn / .jsn / audioreach
   topology blobs) is NOT contained in this repository. See
   device/huawei/gaokun3/firmware/README.md for how to obtain it.

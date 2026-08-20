@@ -1,0 +1,56 @@
+// SSC（Snapdragon Sensor Core）客户端 —— 从 Android 侧读 SLPI 上的传感器。
+//
+// 为什么自己写：libssc 依赖 glib / gio / gobject / qmi-glib / libprotobuf-c，
+// 整套 GLib 栈搬不进 Android；但协议逻辑很薄，.proto 只有几百行，
+// 而 AOSP 自带 protoc 与 libprotobuf-cpp-lite。
+// 协议规格（含每条事实的来源行号）见 docs/sensors-ssc-protocol.md。
+//
+// 许可证：.proto 与本目录代码都是 GPL-3.0（源自 libssc）。
+// vendor 分区里已有先例 —— hexagonrpcd 同样是 GPL-3.0。
+
+// 可复用的客户端。将来的 AIDL sensors HAL 直接链这个。
+cc_library_static {
+    name: "libgaokun3ssc",
+    srcs: [
+        "ssc_client.cpp",
+        "ssc-common.proto",
+        "ssc-sensor-suid.proto",
+        "ssc-sensor-accelerometer.proto",
+    ],
+    proto: {
+        type: "lite",
+        // ★ 必须关掉：否则生成的头是 device/huawei/gaokun3/ssc/xxx.pb.h，
+        //   而 .proto 之间的 import "ssc-common.proto" 也解析不了。
+        canonical_path_from_root: false,
+        export_proto_headers: true,
+    },
+    // ★ 静态链接 protobuf，不用 shared_libs：
+    //   libprotobuf-cpp-lite.so 只在 /system/lib64，而 vendor 二进制走 vendor
+    //   链接命名空间，看不见 system 那份（CLAUDE.md 里 tinymix/libtinyalsa
+    //   踩过同一个坑）。静态链接顺带让手动推送的诊断工具不必带 .so。
+    static_libs: ["libprotobuf-cpp-lite"],
+    export_include_dirs: ["."],
+    vendor: true,
+    cflags: [
+        "-Wall",
+        "-Werror",
+    ],
+}
+
+// 命令行验证工具（对标 Linux 上的 ssccli）。
+cc_binary {
+    name: "gaokun3-ssc-test",
+    srcs: ["ssc_test.cpp"],
+    static_libs: [
+        "libgaokun3ssc",
+        "libprotobuf-cpp-lite",
+    ],
+    // 静态 protobuf 引用了 __android_log_write，必须补 liblog，
+    // 否则链接期 undefined symbol。
+    shared_libs: ["liblog"],
+    vendor: true,
+    cflags: [
+        "-Wall",
+        "-Werror",
+    ],
+}
