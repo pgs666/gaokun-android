@@ -1,0 +1,123 @@
+name: 🧨 Install / boot failure / 安装与开机失败
+description: The installer failed, or the machine will not boot far enough to use. / 装不上，或者开不起来。
+title: "[Install] "
+labels: ["install", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This machine has **no serial console and no working recovery**, so the rescue Linux on the internal disk is the only place most evidence lives. If you can still reach it over SSH, say so — that usually means the machine is repairable remotely and this issue is solvable.
+        本机**没有串口、也没有可用的 recovery**，所以证据基本只能从内置盘上的救援 Linux 里拿。如果它还能 SSH 进去，请写明 —— 那基本意味着机器还能远程救回来。
+
+        ⚠️ **Redact your Wi-Fi SSID, MAC addresses and public IP before pasting.**
+        ⚠️ **贴之前先删掉 Wi-Fi SSID、MAC 地址、公网 IP。**
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Pre-flight / 提交前确认
+      options:
+        - label: "I read [If it will not boot](https://github.com/vahiru/gaokun-android/blob/main/docs/INSTALL.md) in the install guide and my symptom is not in that table. / 读过安装指南里的\"开不了机怎么办\"，我的症状不在那张表里。"
+          required: true
+        - label: "Secure Boot is disabled in the UEFI setup. / UEFI 里已关闭 Secure Boot。"
+          required: true
+        - label: "I verified the release sha256 before writing anything. / 刷之前核对过发布文件的 sha256。"
+          required: true
+
+  - type: input
+    id: hardware
+    attributes:
+      label: Machine / 机器
+      description: |
+        Model, SKU, **BIOS version**. ⚠️ BIOS **2.17 is not supported** (different touch SPI bus and GPIO numbering than 2.16).
+        型号、SKU、**BIOS 版本**。⚠️ **BIOS 2.17 不支持**。
+      placeholder: "GK-W7X, SKU C233, BIOS 2.16"
+    validations:
+      required: true
+
+  - type: input
+    id: release
+    attributes:
+      label: Release / 使用的发布版本
+      description: The release tag or the OTA zip filename. / 发布 tag，或者 OTA zip 的文件名。
+      placeholder: "v0.1.0-alpha  /  crDroidAndroid-16.0-20260820-gaokun3-v12.11.zip"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Where it broke / 卡在哪一步
+      options:
+        - Live USB will not boot at all / U 盘引导不起来
+        - "scripts/install-gaokun3.sh failed / 安装脚本报错"
+        - Installer finished, but there is no boot menu / 装完了但没有启动菜单
+        - Boot menu appears, Android entry reboots or resets / 菜单有，选 Android 就重启
+        - Android boots but reset-loops before the desktop / 起来了但进桌面前循环重启
+        - Boots to desktop, but a core piece is dead (no Wi-Fi / no GPU / no sound) / 能进桌面但核心功能是死的
+        - Broke after an OTA / OTA 之后坏的
+        - Broke after switching slots / 切槽位之后坏的
+        - Rescue Linux itself will not boot / 救援 Linux 起不来
+        - Other / 其他
+    validations:
+      required: true
+
+  - type: dropdown
+    id: rescue
+    attributes:
+      label: Is the rescue Linux still reachable? / 救援 Linux 还能进吗？
+      description: SSH on the LAN, hostname `gaokun3-rescue.local`. / 局域网 SSH，主机名 `gaokun3-rescue.local`。
+      options:
+        - "Yes — SSH works / 能，SSH 正常"
+        - "It boots, but no network / 能开机但没网"
+        - "No — it will not boot either / 不能，它也起不来"
+        - "Not installed / I installed without it / 没装它"
+    validations:
+      required: true
+
+  - type: textarea
+    id: symptom
+    attributes:
+      label: What you did and what happened / 你做了什么、发生了什么
+      description: Exact commands and exact messages. If the screen showed something before dying, describe or attach a photo. / 命令和报错原文照贴。屏幕上闪过什么也写下来，可以配照片。
+    validations:
+      required: true
+
+  - type: textarea
+    id: disk
+    attributes:
+      label: Partition table and boot entries / 分区表与启动项
+      description: |
+        From the rescue Linux (or the live USB), as root:
+        在救援 Linux（或 U 盘环境）里以 root 跑：
+        ```
+        sgdisk -p /dev/nvme0n1; ls -l /boot/efi/loader/entries/; cat /boot/efi/loader/loader.conf; df -h /boot/efi; ls -l /boot/efi/slot_a /boot/efi/slot_b
+        ```
+        A **full ESP** is a real and non-obvious cause of failed updates on this device — it makes the OTA postinstall hook fail, and it has previously produced a truncated kernel.
+        **ESP 满了**在本机是真实且不显然的故障原因 —— 会让 OTA 的 postinstall 钩子失败，历史上还写出过被截断的内核。
+      render: shell
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / 日志
+      description: |
+        Whatever you can get, in this order of usefulness:
+        能拿到多少贴多少，按有用程度排序：
+        * Installer output / 安装脚本的完整输出
+        * `journalctl -k -b -1` from the rescue Linux / 救援 Linux 里上一次启动的内核日志
+        * `/sys/fs/pstore` and `/var/lib/systemd/pstore/` — ⚠️ **empty is expected for first-stage-mount failures.** Android init calls `reboot()` rather than panicking. Adding `androidboot.init_fatal_panic=true` to the boot entry turns that into a real panic that `efi_pstore` does capture. / ⚠️ **first-stage mount 失败时它必然是空的**：init 是主动 `reboot()` 而不是 panic。给启动项加 `androidboot.init_fatal_panic=true` 才能把它变成真 panic 被 `efi_pstore` 抓住。
+        * `adb logcat -b all -d`, if adb ever comes up (TCP adb on port 5555 is enabled by default) / adb 起来过的话（默认开着 5555 的 TCP adb）
+      render: shell
+
+  - type: textarea
+    id: firmware
+    attributes:
+      label: Firmware / 固件
+      description: |
+        The proprietary Huawei firmware is not in the release. Missing firmware looks exactly like broken hardware: no GPU, no Wi-Fi, no sound.
+        专有固件不在发布包里。**固件缺失的表现和硬件坏了一模一样**：没 GPU、没 Wi-Fi、没声音。
+        ```
+        adb shell 'ls /vendor/firmware/qcom/sc8280xp/HUAWEI/gaokun3/'; adb shell 'dmesg | grep -i firmware'
+        ```
+      render: shell

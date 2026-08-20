@@ -1,0 +1,151 @@
+name: 🐞 Bug report / 缺陷报告
+description: The system boots, but something behaves wrong. / 系统能起来，但某个功能不对。
+title: "[Bug] "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Measurements beat adjectives. `logcat -b all` and `dmesg` are worth more than any description of how it felt.
+        实测比形容词有用：`logcat -b all` 和 `dmesg` 比"卡了"值钱得多。
+
+        ⚠️ **Redact before pasting: Wi-Fi SSID, MAC addresses, public IP, serial numbers.**
+        ⚠️ **贴日志前先删掉：Wi-Fi SSID、MAC 地址、公网 IP、序列号。**（这个仓库曾为此改写过一次 git 历史。）
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Pre-flight / 提交前确认
+      options:
+        - label: "This is not one of the [known issues](https://github.com/vahiru/gaokun-android#known-issues) — s2idle resume, no working recovery, audio/Bluetooth deadlock after long uptime, ambient light sensor, USB adb drop, permissive SELinux. / 确认不是已知问题里那几条。"
+          required: true
+        - label: "I searched the existing issues. / 搜过现有 issue。"
+          required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area / 涉及部件
+      options:
+        - Boot / stability — reboots, hangs, black screen / 开机与稳定性
+        - Display — brightness, refresh rate, rotation / 显示
+        - GPU / rendering / Vulkan / 图形
+        - Audio — speakers, headphone jack, microphones / 音频
+        - Wi-Fi / Bluetooth / 网络与蓝牙
+        - Touchscreen / keyboard / touchpad / 输入
+        - Sensors / auto-rotate / 传感器与自动旋转
+        - Battery / charging / thermal / 电池、充电与温控
+        - USB / USB-C DisplayPort / USB
+        - OTA / updates / A-B slots / OTA 与槽位
+        - Apps / framework / 应用与框架
+        - Other / 其他
+    validations:
+      required: true
+
+  - type: input
+    id: hardware
+    attributes:
+      label: Machine / 机器
+      description: |
+        Model, SKU and **BIOS version** (from the label on the back and the UEFI setup screen).
+        ⚠️ BIOS **2.17 is not supported** — the touch SPI bus and GPIO numbering differ from 2.16, which is what the upstream driver targets.
+        型号、SKU 和 **BIOS 版本**（机身标签 + UEFI 设置界面）。⚠️ **BIOS 2.17 不支持**，触摸的 SPI 总线和 GPIO 编号与 2.16 完全不同。
+      placeholder: "GK-W7X, SKU C233, BIOS 2.16, 2022"
+    validations:
+      required: true
+
+  - type: textarea
+    id: build
+    attributes:
+      label: Build / 版本
+      description: |
+        Paste the output of, over adb or in a terminal on the device:
+        请贴下面这条命令的输出（adb 或设备上的终端）：
+        ```
+        getprop ro.build.display.id; getprop ro.build.date; getprop ro.build.date.utc; getprop ro.build.fingerprint; getprop ro.crdroid.device; uname -a; bootctl get-current-slot; getprop ro.boot.slot_suffix
+        ```
+        If the machine will not boot far enough for adb, use the **Install / boot failure** template instead.
+        如果机器根本起不到 adb，请改用 **安装 / 开机失败** 模板。
+      render: shell
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install-path
+    attributes:
+      label: How this build got onto the machine / 这个版本是怎么装上去的
+      options:
+        - Fresh install with scripts/install-gaokun3.sh / 用安装脚本全新安装
+        - OTA through Settings → System update / 设置里的系统更新
+        - OTA sideloaded with update_engine_client --payload=file:// / 本地 payload 装的
+        - Self-built from source / 自己编的
+        - Other / unsure / 其他或不确定
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what you expected / 现象与预期
+      description: One or two sentences each. / 各写一两句就够。
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce / 复现步骤
+      description: Numbered, from a fresh boot if possible. Include the exact commands you ran. / 从冷启动开始编号写，命令请原样贴。
+      placeholder: |
+        1. Boot, wait for the desktop
+        2. adb shell tinyplay ...
+        3. ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: How often / 复现频率
+      options:
+        - Every time / 每次都出
+        - Often, not always / 经常但不是每次
+        - Happened once / 只出现过一次
+        - Only after long uptime / 只在长时间运行后出现
+    validations:
+      required: true
+
+  - type: dropdown
+    id: rescue-repro
+    attributes:
+      label: Does it also happen in the rescue Linux on the same kernel? / 在同一内核的救援 Linux 里是否同样出现？
+      description: |
+        This single answer often decides everything: if it reproduces under Ubuntu, it is a kernel or firmware problem and nothing to do with Android or this device tree. That is exactly how the suspend bug was pinned down.
+        这一条常常一句定性：如果 Ubuntu 下同样出现，那就是内核/固件的事，与 Android 和设备树无关 —— 待机那个 bug 就是这么定性的。
+      options:
+        - Not applicable / 不适用
+        - Not tested / 没测
+        - "Yes — reproduces in Ubuntu too / 是，Ubuntu 下也出现"
+        - "No — Android only / 否，只有 Android 上有"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / 日志
+      description: |
+        Attach as files if long. Useful sources on this device:
+        长日志请以文件附件上传。本机能拿到的东西：
+        * `adb logcat -b all -d > logcat.txt`
+        * `adb shell dmesg > dmesg.txt` (or `journalctl -k` from the rescue system)
+        * `adb shell 'ls /data/vendor/gaokun3/'` — the hang watchdog writes `hangdump-<uptime>/` when a thread sits in D state for two minutes / 死锁取证看门狗的输出目录
+        * `/sys/fs/pstore` and `/var/lib/systemd/pstore/` — ⚠️ **empty is normal for early-boot failures**: Android init calls `reboot()` instead of panicking / ⚠️ **早期启动失败时它是空的，这是正常的**
+        * audio: `adb shell 'cat /proc/asound/card0/pcm0p/sub0/status'` and `tinymix` / 音频看这两个
+      render: shell
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else / 其他补充
+      description: Photos of the screen are fine as a supplement, but never as a substitute for text logs. / 拍屏可以作为补充，但不能代替文字日志。

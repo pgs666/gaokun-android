@@ -1,0 +1,48 @@
+name: 📚 Documentation correction / 案卷纠错
+description: Something in docs/ or the README is wrong, out of date, or has been overturned by a measurement. / docs/ 或 README 里有一条错了、过时了，或者被实测推翻了。
+title: "[Docs] "
+labels: ["documentation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        `docs/` is a primary artifact of this project, not an afterthought: it records what was measured, what turned out to be wrong, and which earlier conclusions were later overturned. Several were. **Overturning one is a contribution, not a complaint** — please include the measurement that does it, so the correction can be trusted as much as the original claim was.
+        `docs/` 是本项目的主要产出之一，不是附属品：它记录了实测了什么、哪条是错的、哪条后来被推翻。确实有好几条被推翻了。**推翻一条是贡献，不是抱怨** —— 请把推翻它的那次实测一起贴上来，好让新结论和旧结论一样可信。
+
+  - type: input
+    id: location
+    attributes:
+      label: Where / 位置
+      description: File and line, or the section heading. / 文件加行号，或者小节标题。
+      placeholder: "docs/stage4-findings.md #40  /  README.md, Status table, Headphone jack row"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind / 类型
+      options:
+        - "Factually wrong — I measured otherwise / 事实错误，我实测的结果相反"
+        - "Out of date — fixed or changed since / 过时了，后来已经变了"
+        - "Unclear or missing a step someone will trip on / 说不清楚，或者漏了一步会让人踩坑"
+        - "Broken link, path or command / 链接、路径或命令是坏的"
+        - "Typo / formatting / 错别字或排版"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What it says, and what is actually true / 原文怎么说、实际是什么
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence / 证据
+      description: |
+        For a factual correction, the command you ran and its output. If the old claim and your result differ, **the hardware wins** — that rule is why several of these files read the way they do.
+        事实性纠错请贴你跑的命令和输出。如果旧结论和你的结果冲突，**以实机为准** —— 这条规则正是这些文件现在这个样子的原因。
+      render: shell

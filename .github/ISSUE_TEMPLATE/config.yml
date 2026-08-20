@@ -1,0 +1,20 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Telegram — "is this normal?" / 提问闲聊
+    url: https://t.me/gaokunAndroid
+    about: Fast answers. Anything reproducible still deserves an issue, so it does not get lost in scrollback. / 能复现的问题请开 issue，聊天记录会沉底。
+  - name: 💬 QQ 群 920133252
+    url: https://github.com/vahiru/gaokun-android/blob/main/README.zh-CN.md
+    about: 中文交流群，群号 920133252。
+  - name: 📄 Known issues / 已知问题
+    url: https://github.com/vahiru/gaokun-android#known-issues
+    about: s2idle, no working recovery, audio/BT deadlock, ambient light sensor, USB adb drop, permissive SELinux — already tracked. / 这几条已在跟踪，不用重复提。
+  - name: 🗂 Backlog / 待办清单
+    url: https://github.com/vahiru/gaokun-android/blob/main/docs/TODO.md
+    about: Every open and parked item, with the reason it is parked and the first concrete step. / 每一项为什么搁置、下一步是什么，都写了。
+  - name: 🧭 Install guide / 安装指南
+    url: https://github.com/vahiru/gaokun-android/blob/main/docs/INSTALL.md
+    about: Read "If it will not boot" before filing an install problem. / 开安装类 issue 前先读"开不了机怎么办"。
+  - name: 📚 Engineering record / 工程案卷
+    url: https://github.com/vahiru/gaokun-android/tree/main/docs
+    about: What was measured, what turned out wrong, which conclusions were overturned. / 实测了什么、哪条结论被推翻了。
