@@ -2,7 +2,7 @@
  * Slot mirroring from Android's misc partition into systemd-boot's loader.conf.
  *
  * Copyright 2026 The gaokun-android contributors
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
 #include "EspSlot.h"

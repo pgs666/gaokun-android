@@ -1,6 +1,6 @@
 /*
  * gaokun3-bootimg-extract —— 从 Android boot 镜像里取出 kernel / ramdisk / dtb
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * 为什么需要它：本机【没有能读 Android boot 镜像的 bootloader】。
  * 引导链是 UEFI + systemd-boot，后者只会从 ESP 上按 BLS 条目加载文件。

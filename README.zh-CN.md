@@ -215,6 +215,9 @@ Android 相关的配置断言在
 
 ## 许可
 
-Apache License 2.0，见 [`LICENSE`](LICENSE) 与 [`NOTICE`](NOTICE)。
+GNU General Public License v3.0 或更新版本，见 [`LICENSE`](LICENSE) 与
+[`NOTICE`](NOTICE)。少数从 AOSP 改造而来的文件保留它们自己的 Apache-2.0 头
+（Apache-2.0 单向兼容 GPL-3，可以并入）；而 [`patches/`](patches/) 下的内核补丁
+**保持 GPL-2.0-only** —— 它们是 Linux 的衍生作品，不能改许可。
 `patches/` 下针对 Linux 内核的补丁按衍生作品适用 GPL-2.0-only；
 Mesa 补丁沿用上游的 MIT。

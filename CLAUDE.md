@@ -366,7 +366,8 @@
 > - ⚠️★**救援系统的 IP 会漂**（DHCP，实测 .230 → .54，害我死等了 7 分钟）。
 >   **avahi 在跑，用 `gaokun3-rescue.local`**，别再写死 IP。
 >
-> **仓库已公开**：https://github.com/vahiru/gaokun-android （Apache-2.0）。
+> **仓库已公开**：https://github.com/vahiru/gaokun-android
+> （★2026-08-20 起改为 **GPL-3.0-or-later**；发版当时是 Apache-2.0）。
 > Release **v0.1.0-alpha** 含全新安装产物（`super.img.zst` / `Image` / dtb /
 > `ramdisk.img` + sha256 清单）与 A/B 更新包
 > （`crDroidAndroid-16.0-20260820-gaokun3-v12.11.zip`）+ `gaokun3.json`。

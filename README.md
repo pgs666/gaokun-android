@@ -235,6 +235,9 @@ it does not get lost in scrollback.
 
 ## License
 
-Apache License 2.0 — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
+GNU General Public License v3.0 or later — see [`LICENSE`](LICENSE) and
+[`NOTICE`](NOTICE). A few files adapted from AOSP keep their Apache-2.0
+headers, and the kernel patches under [`patches/`](patches/) stay GPL-2.0-only
+because they are derivative works of Linux.
 Kernel patches under `patches/` are GPL-2.0-only as derivative works of Linux;
 Mesa patches are MIT, matching upstream.

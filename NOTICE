@@ -7,27 +7,37 @@ Open Source Project and crDroid / LineageOS for the Huawei MateBook E Go
 
 Licensing summary
 -----------------
-* Device tree, scripts and documentation in this repository:
-      Apache License 2.0 (see LICENSE)
-* Patches under patches/ that apply to the Linux kernel:
-      GNU General Public License v2.0 only, as derivative works of Linux
-* Patches under patches/ that apply to Mesa:
-      MIT, matching upstream Mesa
+This project as a whole is licensed under the **GNU General Public License,
+version 3 or later** (see LICENSE). It is distributed together with components
+under other licenses; those keep their own terms.
+
+* Device tree, scripts, documentation and everything else original to this
+  repository:
+      GNU General Public License v3.0 or later
 * device/huawei/gaokun3/ssc/ (the Snapdragon Sensor Core client):
-      GNU General Public License v3.0 or later. The .proto files are taken
-      verbatim from libssc (Copyright (C) 2022-2026 Dylan Van Assche,
-      https://codeberg.org/dylanvanassche/libssc), and the client code is a
-      reimplementation of that protocol, so it inherits GPL-3.0-or-later.
-      The protocol itself is documented in docs/sensors-ssc-protocol.md.
-* device/huawei/gaokun3/sensors-hal/ (the AIDL sensors HAL):
-      Mixed. Sensor.cpp / Sensors.cpp / main.cpp and the headers under
-      include/sensors-impl/ are adapted copies from AOSP
-      (hardware/interfaces/sensors/aidl/default), Apache-2.0, with their
-      copyright headers intact. SscHub.{h,cpp} is ours. Because the binary
-      links the GPL-3.0 SSC client, the resulting executable is
-      GPL-3.0-or-later.
+      GPL-3.0-or-later. The .proto files are taken verbatim from libssc
+      (Copyright (C) 2022-2026 Dylan Van Assche,
+      https://codeberg.org/dylanvanassche/libssc); the client code is a
+      reimplementation of that protocol, documented in
+      docs/sensors-ssc-protocol.md.
+* Files adapted from the Android Open Source Project keep their **Apache-2.0**
+  headers and copyright lines, because that is how AOSP licenses them.
+  Apache-2.0 is one-way compatible with GPL-3, so they combine cleanly:
+      device/huawei/gaokun3/sensors-hal/{main,Sensor,Sensors}.cpp and
+      sensors-hal/include/sensors-impl/*      (from hardware/interfaces/sensors)
+      device/huawei/gaokun3/boot_control/{BootControl.cpp,BootControl.h,main.cpp}
+                                              (from hardware/interfaces/boot)
+      device/huawei/gaokun3/mesa/gaokun.toml  (Copyright 2024 Google LLC)
+* ⚠️ patches/ that apply to the Linux kernel:
+      **GNU General Public License v2.0 only** — they are derivative works of
+      Linux and cannot be relicensed. Relicensing this project to GPL-3 does
+      not (and must not) change them. They are distributed alongside, not
+      combined with, the GPL-3 userspace.
+* patches/ that apply to Mesa:
+      MIT, matching upstream Mesa.
 * external/hexagonrpc (fetched by the local manifest, not vendored here):
-      GNU General Public License v3.0, upstream linux-msm/hexagonrpc
+      GNU General Public License v3.0, upstream linux-msm/hexagonrpc.
 * Proprietary firmware for this device (Huawei .mbn / .jsn / audioreach
-  topology blobs) is NOT contained in this repository. See
-  device/huawei/gaokun3/firmware/README.md for how to obtain it.
+  topology blobs, and the SLPI sensor configuration) is NOT contained in this
+  repository. See device/huawei/gaokun3/firmware/README.md and
+  device/huawei/gaokun3/hexagonrpcd-root/README.md for how to obtain it.
