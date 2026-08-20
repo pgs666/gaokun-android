@@ -230,6 +230,18 @@ for sl in a b; do
     cp "$BOOTPARTS/gaokun3.dtb" "/mnt/esp/$MID/android/slot_$sl/gaokun3.dtb"
     cp "$BOOTPARTS/ramdisk.img" "/mnt/esp/$MID/android/slot_$sl/ramdisk.img"
 done
+# Android recovery, if the release ships it. It shares the kernel and DTB with
+# the system — verified identical, sha256 for sha256 — so only the ramdisk is
+# extra. Optional so that older release directories still install.
+if [ -f "$REL/recovery-ramdisk.img" ]; then
+    for sl in a b; do
+        cp "$REL/recovery-ramdisk.img" "/mnt/esp/$MID/android/slot_$sl/recovery-ramdisk.img"
+    done
+    echo "  recovery ramdisk installed for both slots"
+else
+    echo "  (no recovery-ramdisk.img in the release — skipping recovery)"
+fi
+
 # The rescue Linux runs the same kernel; it just gets its own initrd.
 cp "$BOOTPARTS/Image"       "/mnt/esp/$MID/rescue/Image"
 cp "$BOOTPARTS/gaokun3.dtb" "/mnt/esp/$MID/rescue/gaokun3.dtb"
@@ -263,6 +275,20 @@ linux      /$MID/android/slot_$s/Image
 devicetree /$MID/android/slot_$s/gaokun3.dtb
 initrd     /$MID/android/slot_$s/ramdisk.img
 EOF
+done
+
+# One recovery entry per slot, derived from the Android entry so the cmdline
+# (slot_suffix included) can never drift apart from it. Recovery does not need
+# a different cmdline — the embedded one in recovery.img is byte-identical to
+# boot.img's; it is the ramdisk that makes it recovery.
+for s in a b; do
+    [ -f "/mnt/esp/$MID/android/slot_$s/recovery-ramdisk.img" ] || continue
+    sed -e "s|^initrd .*|initrd     /$MID/android/slot_$s/recovery-ramdisk.img|" \
+        -e "s|^title .*|title      Recovery (gaokun3) — slot _$s|" \
+        -e "s|^version .*|version    gaokun3-recovery-$s|" \
+        -e "s|^sort-key .*|sort-key   zzrecovery$s|" \
+        "/mnt/esp/loader/entries/$MID-android-$s.conf" \
+        > "/mnt/esp/loader/entries/$MID-recovery-$s.conf"
 done
 
 cat > "/mnt/esp/loader/entries/$MID-rescue.conf" <<EOF

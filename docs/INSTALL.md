@@ -27,6 +27,7 @@ Download from [Releases](../../releases) and unpack into one directory:
 |---|---|
 | `super.img.zst` | system / system_ext / product / vendor |
 | `boot.img` | Kernel, device tree and first-stage ramdisk in one standard Android boot image (header v2). Written to both `boot_a` and `boot_b`; the installer also unpacks it onto the ESP for systemd-boot |
+| `recovery-ramdisk.img` | Android recovery. Optional — releases before v0.3 do not have it. It shares the kernel and DTB with the system, so only the ramdisk ships. The installer puts it on the ESP for both slots and adds a boot menu entry |
 | `crDroidAndroid-*.zip` | The OTA package. **Not needed to install** — this is what the updater consumes later |
 
 ```sh
@@ -126,6 +127,18 @@ currently running — which is what makes rollback safe.
 
 If the hook fails (the usual reason is a full ESP), the whole update fails
 loudly rather than leaving you with a new system and an old kernel.
+
+## Recovery
+
+Pick **Recovery** from the 15-second boot menu. It is a normal Android recovery,
+so `adb sideload` and `fastbootd` work from there.
+
+⚠️ `adb reboot recovery` and *Erase all data* in Settings do **not** reach it yet.
+Those go through the bootloader control block in `misc`, and systemd-boot does
+not read it — the request lands nowhere. Use the boot menu instead. (Wiring the
+BCB up is possible and planned; the catch is that these kernels boot with
+`efi=noruntime`, so Android cannot set systemd-boot's one-shot EFI variable and
+the default entry has to be swapped and then restored.)
 
 ## If it will not boot
 
