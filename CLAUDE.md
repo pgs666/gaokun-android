@@ -5,7 +5,46 @@
 在华为 MateBook E Go（Snapdragon 8cx Gen 3 / sc8280xp，代号 gaokun）上跑原生 AOSP，
 最终目标是能稳定运行 arm64 手游。
 
-**当前阶段：Stage 6 M9 — ★传感器翻案：加速度计在主线上实测通了（Z≈9.87），自动旋转变成可达；光感不通**（每次开工时更新这一行）
+**当前阶段：Stage 6 M10 — ★传感器管道在 Android 上打通（QRTR 服务 400 上线）；剩 QMI 客户端 + AIDL HAL，协议规格已写全**（每次开工时更新这一行）
+
+> **★★ Stage 6 M10（2026-08-20）：传感器管道在 Android 上打通。**
+>
+> ★**判据达成**：Android 里 `gaokun3-qrtr-lookup` 列出 **`400 1 9 13`**
+> —— Snapdragon Sensor Core 服务上线，与 Linux 侧观测一致。逐段确认：
+> `/dev/fastrpc-sdsp` 出现 → AOSP 编出的 `hexagonrpcd` 运行（进程停在
+> `fastrpc_internal_invoke`，20 秒内 DSP 发来 **2880 行**文件请求，序列与
+> Linux 上完全一致）→ SSC 在 DSP 上起来并注册服务 400。
+> - ★**hexagonrpcd 上游自带完整 Android 构建支持**（Android.bp ×5，
+>   `hexagonrpcd-sdsp.rc` 里 service 跑 system:system、`-R /vendor/etc/hexagonrpcd-root`）
+>   —— 不用我们写 bp，工作量远小于预估。它**只依赖 libc**（3443 行 21 个文件）。
+> - ★**bionic 的 `uapi/misc/fastrpc.h` 逐符号比对通过**：需要的 6 个 ioctl
+>   （含关键的 `FASTRPC_IOCTL_INIT_ATTACH_SNS`）与 5 个 uapi struct 全都有。
+> - ★**协议规格已整理成 `docs/sensors-ssc-protocol.md`** —— 把"逆向 libqmi +
+>   libssc"变成"照规格实现"，每条都注了来源行号。最容易记错的一条：
+>   **QRTR 上的 QMI 没有 QMUX 头也没有 marker 字节**，上线就是 7 字节
+>   `service_header` + TLV（`qmi-endpoint-qrtr.c:547` 注释原文）。
+>   **libssc 不能移植**（拖着 glib/gobject/libqmi），但 `.proto` 只有 389 行，
+>   而 AOSP 自带 protoc + libprotobuf-cpp-lite → 重写比移植依赖便宜。
+> - ⬜ **还缺**：QMI/protobuf 客户端（下一个可验证增量 = 独立命令行客户端，
+>   对标 `ssccli`，跑通 SUID 查找→使能→打印 XYZ，那就是 HAL 逻辑的 90%）、
+>   AIDL `android.hardware.sensors` HAL、sepolicy。
+>   另外 `CONFIG_QCOM_FASTRPC` 仍是 `=m`（本轮靠 insmod 验证），
+>   已进 `kernel-config-android.sh` 断言，**待重编内核**（第 13 次 =m 坑）。
+> - ⚠️★**拆掉一颗地雷：`int-crdroid.conf` 已不可启动。** A/B 化后 fstab 四条
+>   logical 行都带 `slotselect`，first-stage mount 必须靠 cmdline 的
+>   `androidboot.slot_suffix` 才能把 `system` 解析成 `system_a`；两个条目的
+>   kernel/dtb/initrd **完全相同**，唯一差别就是 `android-a.conf` 带
+>   `slot_suffix=_a`。少了它就是 M6 那个"进 Android 就重启、pstore 全空"的坑。
+>   `deploy-from-ubuntu.sh` 的默认值和本文说明都已改指 `android-a.conf`。
+> - ⚠️ 更正一条自己的判断：`device_kernel_headers` **不用我们提供**，
+>   AOSP 在 `build/soong/Android.bp:56` 就用 `kernel_headers` 类型定义了它。
+>   我建了空壳导致构建报 `module already defined` —— 因为当时**只 grep 了
+>   `device/` 目录**。判断"树里有没有这个模块"要 grep 全树。
+> - ⚠️ 又被同一个转义坑咬了两次（`` / `
+` 被中间层 collapse 掉，一次把真 CR
+>   写进文档、一次让生成的 python 字符串断行）。**结论固化进脚本注释：
+>   生成代码时一律用 `chr()`，不写反斜杠转义。**
+
 
 > **★★ Stage 6 M9（2026-08-20）：传感器翻案 —— 加速度计真的通了。**
 >
