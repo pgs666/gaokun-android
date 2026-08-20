@@ -5,7 +5,7 @@
 在华为 MateBook E Go（Snapdragon 8cx Gen 3 / sc8280xp，代号 gaokun）上跑原生 AOSP，
 最终目标是能稳定运行 arm64 手游。
 
-**当前阶段：Stage 6 M6 完成 — ★★已公开发版 v0.1.0-alpha；Virtual A/B + 自研 boot_control HAL 实机跑通；安装器脚本已入库**（每次开工时更新这一行）
+**当前阶段：Stage 6 M6 完成 — ★★已公开发版；Virtual A/B + 自研 boot_control HAL 跑通；★系统内 OTA 已接通 R2 并实机验证**（每次开工时更新这一行）
 
 > **★★ Stage 6 M5（2026-08-20）：M4 的成果全部固化进镜像 + 传感器判死。**
 >
@@ -48,6 +48,38 @@
 > 工具 `scripts/probe-windows-sensors.sh`，完整证据 `docs/stage4-findings.md` #37。
 >
 > **★★ Stage 6 M6（2026-08-20）：公开发版 + A/B OTA 打通。**
+>
+> ★**系统内 OTA 已接通并实机验证**（截图为证：「系统更新」页显示
+> 「由 vahiru 维护」、「上次检查 11:02」、「暂无可用更新」）。
+> 托管在 **Cloudflare R2 + 自定义域 `ota.072172.xyz`**（桶 `gaokun-android`）。
+> 布局：`ota/gaokun3.json`（清单）、`builds/<zip>`、`install/<ver>/…`。
+> - crDroid 的 `org.lineageos.updater` 本来就装着，**只差把它指向我们的清单**。
+>   接线只有一条路：`R.string.updater_server_url`，**没有属性可覆盖**
+>   （`UpdatesNetworkDataSource.kt:20`）。而且必须是【构建期】overlay ——
+>   Updater 没为这些字符串声明 `<overlayable>`，运行时 RRO 会被拒。
+>   overlay 路径要镜像模块的 `resource_dirs`：
+>   `overlay/packages/apps/Updater/app/src/main/res/`。
+> - ⚠️★**抓清单的客户端设了 `.followRedirects(false)`**，任何 3xx 直接失败。
+>   实测（从**设备**测，沙箱自己挡出站 HTTP，那边的结论不可信）：
+>   `github.com/…/raw/…` = **302 会挂**；`raw.githubusercontent.com` 与
+>   R2 自定义域 = 200。它还 `require()` 强制 https。
+>   **下载链接反而可以重定向**（走 `HttpURLConnectionClient`，默认跟随）。
+>   ⚠️ 别在这个主机名上加 Redirect/Page Rule —— 报错只有
+>   `Unexpected HTTP status: 301`，绝对想不到是那条规则。
+> - ⚠️ 不用桶自带的 `pub-*.r2.dev`：Cloudflare 明确说它是开发用途、限速、
+>   不走完整缓存。**但自定义域也没缓存住 1 GB 的 zip**
+>   （实测 `cf-cache-status: BYPASS`，免费版单文件缓存上限 512 MB）——
+>   好在 **R2 出站免费**，成本没问题，只是没有边缘加速。
+> - ★**清单的 `timestamp` 必须等于该构建的 `ro.build.date.utc`**。
+>   `createjson.sh` 有时填的是【打包时刻】（`bacon` 之后又跑 `m` 就会错开），
+>   那会让装上此版本后 Updater **永远显示"有更新"**，而那就是同一个版本。
+>   判据在 `UpdatesRepository.kt:113-115`（`==` 视为当前版本、`<` 视为更旧）。
+> - 上传用 `scripts/r2-upload.py`（纯标准库、凭据只从环境变量读）。
+>   **云到云传**：构建机 → R2，2.4 GiB 用 66 秒；从本机传要 8 分钟。
+>   只把 S3 密钥送上构建机，**绝不送账户级 API 令牌**（后者能改 DNS、删桶）。
+>   **顺序：产物先传，清单最后传**，否则中间清单会指向不存在的文件。
+> - ⚠️★**救援系统的 IP 会漂**（DHCP，实测 .230 → .54，害我死等了 7 分钟）。
+>   **avahi 在跑，用 `gaokun3-rescue.local`**，别再写死 IP。
 >
 > **仓库已公开**：https://github.com/vahiru/gaokun-android （Apache-2.0）。
 > Release **v0.1.0-alpha** 含全新安装产物（`super.img.zst` / `Image` / dtb /
