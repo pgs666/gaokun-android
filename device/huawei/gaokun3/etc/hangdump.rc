@@ -1,0 +1,11 @@
+# 音频/蓝牙死锁取证看门狗（见 bin/gaokun3-hangdump.sh 与 findings #38）。
+# 开机完成后才起，避免和启动期的正常 D 状态混淆。
+service hangdump /vendor/bin/gaokun3-hangdump.sh
+    user root
+    group root
+    seclabel u:r:shell:s0
+    disabled
+
+on property:sys.boot_completed=1
+    mkdir /data/vendor/gaokun3 0770 root system
+    start hangdump

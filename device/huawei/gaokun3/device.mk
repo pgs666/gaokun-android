@@ -377,6 +377,15 @@ PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/bin/audio-route.sh:$(TARGET_COPY_OUT_VENDOR)/bin/audio-route.sh \
     $(LOCAL_PATH)/etc/audioroute.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/audioroute.rc
 
+# 音频/蓝牙死锁取证看门狗（findings #38）。用户报过"长期运行后音频与蓝牙
+# 可能死锁"，而我们一次都没复现过 —— 现实是死锁时用户只会重启，证据就没了。
+# 探针只读 /proc 线程状态（不跑 dumpsys），60 秒一次、每次几毫秒；
+# 判据是【同一个 tid 连续三次采样都在 D 状态】，不是"出现过 D"。
+# 命中后采一份到 /data/vendor/gaokun3/hangdump-<uptime>/，每次启动只采一份。
+PRODUCT_COPY_FILES += \
+    $(LOCAL_PATH)/bin/gaokun3-hangdump.sh:$(TARGET_COPY_OUT_VENDOR)/bin/gaokun3-hangdump.sh \
+    $(LOCAL_PATH)/etc/hangdump.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/hangdump.rc
+
 # ★ WindowManager 每显示器设置：关掉大屏默认的 ignoreOrientationRequest。
 # 不装它 → 应用请求横屏时系统不转屏而是把应用信箱化（原神被压成 1600x1000）。
 # 完整机制、实测症状与格式依据见 etc/display_settings.xml 的注释。

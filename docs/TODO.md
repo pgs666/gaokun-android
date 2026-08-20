@@ -37,11 +37,24 @@
 仍全是软解。★ **`external/v4l2_codec2` 本来就在 crDroid 的 manifest 里**
 （`LineageOS/android_external_v4l2_codec2`），不必新增仓库。
 
-**第一步**：把 `external/v4l2_codec2` 加进 `PRODUCT_PACKAGES`
-（`android.hardware.media.c2@1.0-service-v4l2` 或其 AIDL 对应物），
-写 `media_codecs_v4l2.xml` 并挂到 `ro.media.xml_variant.*`，
-再看 `dumpsys media.player` 里有没有出现 `c2.v4l2.*` 组件。
-⚠️ 别忘了 #36 那条：`media.c2.hal.selection` 必须是 `aidl`。
+**第一步**（配方来自 `external/v4l2_codec2/README.md`，三个前提已在设备上核实）：
+`PRODUCT_PACKAGES += android.hardware.media.c2-service-v4l2 libv4l2_codec2_vendor_allocator`，
+装 `media_codecs_c2.xml` 到 `/vendor/etc/`，设两条
+`ro.vendor.v4l2_codec2.*_concurrent_instances`，再看
+`service list | grep media.c2` 有没有出现 `IComponentStore/default`
+以及 `dumpsys media.player` 里的 `c2.v4l2.*`。
+
+已核实的三点：
+* ✅ **不会撞名** —— 设备上目前只有 `IComponentStore/**software**`，
+  v4l2 HAL 要的 `IComponentStore/default` 是空的。
+* ✅ `media.c2.hal.selection` 已经是 `aidl`（#36 那一仗的成果）。
+* ⚠️★ **poolmask 不能照抄 README 的 `0xf50000`** —— 那是 ION 的值，
+  而本机**没有 ION**（`/dev/ion` 不存在、`CONFIG_ION` 也不在）。
+  我们有的是 DMABUF heaps（`system` / `linux,cma` / `default_cma_region`），
+  所以要用 BLOB 的 **`0xfc0000`**。抄错这一个数字大概率就是"组件在、一解码就崩"。
+
+⚠️ 别在没法看视频的时候合这个 —— 它替换的是整条媒体解码通路，
+弄坏了比现在的软解更糟。
 
 ### A3. 自动亮度（环境光）— 已收敛到一处嫌疑
 详见 [#43](stage4-findings.md)。把两份出厂配置逐字段对照之后：
