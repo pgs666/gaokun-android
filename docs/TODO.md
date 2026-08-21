@@ -108,22 +108,41 @@
    `pm_test=freezer` rc=0、`pm_test=devices` 复位 ⇒ 故障夹在
    `dpm_suspend_start()` + `dpm_suspend_noirq()` 之内。
    它 5 秒自动返回、**不需要唤醒源**，因此**安全**（不会把机器睡死）。
-3. **`pcie_aspm=off nvme_core.default_ps_max_latency_us=0` 能让
-   `pm_test=devices` 返回 rc=0** —— 复位被绕过。随后真实挂起**睡进去但没醒**。
+3. **量化测量已建立**（每轮 = 一次开机，`pm_test=devices` 跑到失败或跑满 10 次，
+   **只数 `rc=0`**）：
+
+| 配置 | 有通过的开机 / 总开机 |
+|---|---|
+| 基线（`pcie_aspm.policy=powersupersave` + APST 开） | **0 / 约 16** |
+| 只 `pcie_aspm=off` | 0 / 1 |
+| 只 APST 关 | 0 / 1（另有一次挂死） |
+| 去掉策略（ASPM 默认）+ APST 关 | 0 / 1 |
+| **`pcie_aspm=off` + APST 关** | **3 / 5**（其中一轮连过 10/10） |
+
+   ⇒ 两个都必需，且**光去掉我们自己加的 `powersupersave` 策略不够**。
+   差异是真的（p≈0.002），但**不是确定性修复**。
 
 **下一步（都不需要编内核）**
-* ⬜ **把两个 cmdline 变量分离干净**。已知：**只去掉
-  `pcie_aspm.policy=powersupersave` 没用**（#40 仍复位）；只关 NVMe APST（#41）
-  机器**挂住**、日志未取回 —— 重跑一次 #41 把日志拿到。
-  再单独试 `pcie_aspm=off`（保留 NVMe APST 默认值）。
-* ⬜ 若确认是 **NVMe**：正解多半是给这块盘加 `NVME_QUIRK_NO_APST`（或
-  `NVME_QUIRK_SIMPLE_SUSPEND`）的 quirk，而不是让所有用户加 cmdline。
+* ⬜ ★ **找那个"开机时确定下来的因素"** —— 这是唯一还有把握推进的方向。
+  同一次开机内行为高度一致（连过 10 次 或 第 1 次就死），跨开机才翻转。
+  做法：固定用那个组合配置连开机若干次，**每次都记录完整设备绑定清单 +
+  `/sys/class/wakeup/` + dmesg**，然后比对"能过"与"不能过"的开机。
+* ⬜ 只有弄清上面这层，才谈得上是否把 `pcie_aspm=off` 写进发版 cmdline。
+  ⚠️ 现在就写会让待机变成"有时能睡、有时炸"，**比确定不能睡更糟**。
+* ⬜ 若最终确认与 **NVMe** 有关：正解是给这块盘加 `NVME_QUIRK_NO_APST` /
+  `NVME_QUIRK_SIMPLE_SUSPEND` quirk，而不是让所有用户加 cmdline。
   先 `nvme id-ctrl` 记下 vendor/device id 与 APST 表。
-* ⬜ 若确认是 **ASPM**：注意本机 cmdline 里 `pcie_aspm.policy=powersupersave`
-  **是我们自己加的**，可以直接去掉；但 #40 说明单去掉策略不够，
-  要的是 `pcie_aspm=off`（完全关闭），那是有功耗代价的，需要权衡。
-* ⬜ 复位解决后再攻 **"醒不回来"** —— 这是 M4 描述的那个原始症状，
-  在此之前一直被复位掩盖。
+* ⬜ 复位解决后再攻 **"醒不回来"** —— M4 描述的原始症状，
+  本轮唯一那次成功睡进去的观测（#39）就是死在这一步。
+
+**⚠️ 判据纪律（本轮最贵的教训）**
+★ 这个故障的**单次失败率约 93%**，所以"改一次、试一次、炸了"对任何配置都是
+大概率事件，**几乎没有证据力**。#39/#43 用同一条 cmdline 一正一反，
+把我带偏了两轮。**任何结论都必须来自"跑到失败或跑满 10 次"的循环。**
+⚠️ 工具本身也有坑：`pm_test` 周期后会留 pending 唤醒事件，紧接着再挂起会
+**立刻 `-EBUSY` 返回**；第一版脚本把非零返回当成"通过"，报出了假的 10/10。
+判据是**耗时**（真实周期 5–8 秒，`-EBUSY` 是 0–1 秒）。
+脚本：`scratchpad/k/s71test-loop.sh`（本机 scratchpad，未入库）。
 
 **⚠️ 靶场纪律（本轮让用户按了三次电源键，是我的问题）**
 * **"醒不回来"没解决之前，一律不跑真实挂起** —— `pm_test=devices` 够用且安全。
