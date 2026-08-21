@@ -1682,3 +1682,74 @@ lid wakeup, EC may stop suspend with a 0xc0 event`。我们复现不了"works"�
 **改进方向**：给救援系统加一条不依赖 WiFi 的带外通道
 （USB gadget 网卡 `g_ether` 或串口 `g_serial`），本机 USB 口是通的。
 
+
+## #48 ★★★ s2idle 在上游 7.1.0-rc3 内核上**完全正常** —— 这是一个 7.1→7.2 回归（2026-08-21）
+
+同一台机器、同一个 BIOS 2.16、同一个救援 Ubuntu 根文件系统，只换内核：
+
+```
+[up=95 ] PRE 真实挂起
+[up=137] ★★★ POST rc=0 —— RESUME 成功！success=1 fail=0
+   PM: suspend entry (s2idle)
+   Restarting tasks: Starting / Done
+   PM: suspend exit
+```
+
+**连续 4 次挂起/恢复，`success=4 fail=0`**，uptime 全程连续（无复位）。
+内核时间只走了 2.6 秒而墙钟走了 40 秒 —— 教科书式的 s2idle。
+
+内核：`7.1.0-rc3-gaokun3+ #1 SMP PREEMPT Thu May 14 00:21:38 UTC 2026`
+（原始 gaokun 安装带来的上游构建，`/boot/vmlinuz-7.1.0-rc3-gaokun3+`）。
+
+### 这一条推翻了此前所有关于 s2idle 的定性
+
+* ❌ **不是硬件/EC 缺陷**（M4 的定性、也是 README 首屏挂了很久的说法）
+* ❌ 不是 Android、不是我们的设备树、不是 ath11k/显示/remoteproc
+* ✅ **是内核回归**，而且**可二分**
+
+### ⚠️ 同时更正 #46/#47 里我自己的一个错误
+
+我在 #46/#47 写过"用 Ubuntu 自带的 `#2` 内核（上游配置）结果一样 ⇒ 排除我们的
+配置"。**这是错的** —— `strings vmlinuz` 显示那个 `#2` 是
+`Linux version 7.2.0-rc2-gaokun3+ (vahiru@CICD)`，**是我们自己构建机编的**，
+不是上游构建。所以那条排除不成立，"我们的配置"当时并没有被排除。
+★ 教训：**判断"这是谁编的内核"要看 `strings vmlinuz | grep "Linux version"`
+里的构建者字段，不能只看 `uname -v` 的 `#N`。**
+
+### 怎么做到的（方法本身值得复用）
+
+原始安装的 7.1 整套还留在救援分区上：`vmlinuz-` / `initrd.img-` / `dtb-` /
+`/lib/modules/7.1.0-rc3-gaokun3+/` / `config-`。做法：
+
+1. **从 Android 里只读挂载 Ubuntu 分区**（`mount -t ext4 -o ro /dev/block/nvme0n1p3`），
+   不用重启就能读它的 `/boot`；
+2. 腾 ESP 空间（删掉两个用不上的 `recovery-ramdisk.img`，30 MB），
+   把 7.1 的 kernel/initrd/dtb 拷进 ESP，克隆一个 BLS 条目；
+3. ★ **把测试做成开机自启的 systemd oneshot 服务**，结果写进 `/var/log/s71.log`
+   —— 这样**不依赖 WiFi**：即使救援系统没连上网，也能事后从 Android
+   挂载分区把结果读回来。（本轮救援 Ubuntu 的 IP 从 .230 漂到 .123，
+   正是靠这个设计才没白跑。）
+
+### 配置差异（7.1 上游 vs 我们的 7.2 Android）
+
+PM/挂起相关的差异共 33 条，**绝大多数是 `=m` vs `=y`**（我们是单体内核，
+Android 不加载模块）。唯一一条语义上直接相关的是：
+
+| 符号 | 7.1（能挂起）| 我们的 7.2（不能）|
+|---|---|---|
+| **`PM_WAKELOCKS`** | **n** | **y**（`_GC=y`、`_LIMIT=100`）|
+
+⚠️ 但这条是**混淆的** —— 代码（7.1 vs 7.2 + 补丁集）和配置同时不同，
+不能据此下结论。
+
+### 下一步（按信息量排序）
+
+1. ★ **用 7.1 的 config 在 7.2 树上编一次**（`make olddefconfig`）。
+   通了 ⇒ 是**配置**差异，可以再二分配置（很快）；仍坏 ⇒ 是**代码**回归。
+   这是一次构建就能把问题劈成两半的实验。
+2. 若是代码回归：在 7.1.0-rc3 → 7.2.0-rc2 之间 `git bisect`
+   （约 10 次构建，每次约 15 分钟）。注意 buildbot 的补丁集在两个版本上不同，
+   二分时要固定补丁集或只二分 mainline。
+3. **实用旁路**：如果用户现在就想要待机，可以考虑把 Android 的内核换回 7.1
+   —— 代价是 Venus（7.2 的补丁）与其他 7.2 特性，需要评估补丁能否回移。
+
