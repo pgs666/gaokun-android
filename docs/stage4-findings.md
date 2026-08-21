@@ -1753,3 +1753,78 @@ Android 不加载模块）。唯一一条语义上直接相关的是：
 3. **实用旁路**：如果用户现在就想要待机，可以考虑把 Android 的内核换回 7.1
    —— 代价是 Venus（7.2 的补丁）与其他 7.2 特性，需要评估补丁能否回移。
 
+
+## #49 ★★★ s2idle 元凶定位到 **EC 驱动的 suspend/resume**（2026-08-21）
+
+接 #48（7.1 能挂起）。这一轮把范围收到了一个驱动上。
+
+### 决定性实验
+
+**在纯 mainline v7.2-rc2 上解绑 EC 驱动，然后做真实挂起：**
+
+```
+[up=593] PRE 真实挂起（EC 已解绑）
+[up=635] ★★★ POST rc=0 success=1
+   PM: suspend entry (s2idle) → Restarting tasks → PM: suspend exit
+```
+
+墙钟走了 42 秒、内核时间只走 2 秒、uptime 连续无复位 —— **真的睡了 40 秒并被
+RTC 叫醒**。随后**连挂 4 次全部成功、0 新增失败**。
+
+⇒ **`huawei-gaokun-ec` 的 suspend/resume 处理就是元凶。**
+
+### 三个内核的行为对照（同机同 rootfs，只换内核）
+
+| 内核 | EC | 结果 |
+|---|---|---|
+| 上游 7.1.0-rc3（#48）| 绑定 | ✅ 挂起+唤醒，4/4 |
+| **纯 mainline v7.2-rc2** | 绑定 | ⚠️ 挂起**干净失败**：`last_failed_dev=15-0038`、`step=suspend_noirq`、`errno=-110`，dmesg `geni_i2c a9c000.i2c: Timeout abort_m_cmd` |
+| **纯 mainline v7.2-rc2** | **解绑** | ✅ **挂起+唤醒，4/4** |
+| 我们的 7.2（+buildbot 补丁）| 绑定 | ❌ 睡得下去，**任何唤醒都整板复位** |
+
+★ 第二行说明 buildbot 那个
+`platform/arm64: huawei-gaokun-ec: fix suspend/resume ordering`
+（把 EC 的 PM 回调从 NOIRQ 挪到普通阶段）**是必需的** —— 没有它，EC 的 I2C
+握手落在 I2C 控制器已挂起之后，必然 -110。**所以不是这个补丁引入的回归。**
+
+### 已排除的两个具体嫌疑
+
+* ❌ **`introduce EC enable pin`（拉低 `enable-gpios`）不是 delta** ——
+  反解两棵 DTB，EC 节点**完全相同**，7.1 也有 `enable-gpios = <0x4a 0xad 0x00>`，
+  该提交（2026-04-18）早于 7.1 构建（2026-05-14）。
+* ❌ **不是 `STANDBY_EXIT` 握手来不及** —— 把 `gaokun_ec_resume` 的重试
+  从 3 次（约 300 ms）放宽到 30 次（约 3 秒）并加打点，**照样整板复位**。
+
+### ⚠️⚠️ 必须更正：`pm_test=devices` 在本平台是**无效测试**
+
+#46/#47 里那一大批"排除"（显示栈 / ath11k / EC / 三个 remoteproc / 四项同时 /
+CPU power collapse）**全部是用 `pm_test=devices` 做的，因此全部作废**。
+
+判据就在本轮：**同一个 EC 解绑状态下，`pm_test=devices` 会整板复位，
+而真实挂起（`pm_test=none`）却成功并唤醒。** 说明 `pm_test=devices` 本身
+（挂完所有设备后让 CPU 满速空转 5 秒再恢复）在这台机器上就会杀死板子 ——
+很可能是 rpmhpd 的 CX/MX 票已经降下来而 CPU 还在跑。
+
+★ **教训：在这台机器上验证挂起，只能用真实挂起（`pm_test=none` + 唤醒源）。**
+`pm_test` 的 `devices` 及更深的层级不可用；`freezer` 层可用（它不碰设备）。
+
+### ⚠️ 另一处更正（#46/#47）
+
+我写过"用 Ubuntu 自带的 `#2` 内核（上游配置）结果一样 ⇒ 排除我们的配置"。
+那个 `#2` 是 `Linux version 7.2.0-rc2-gaokun3+ (vahiru@CICD)` ——
+**我们自己编的**。判断内核出处要看 `strings vmlinuz | grep "Linux version"`
+里的构建者字段，不能只看 `uname -v` 的 `#N`。
+
+### 下一步（按性价比排序）
+
+1. ★ **最便宜、最对症**：把 `gaokun_ec_suspend()` 里那句
+   `gpiod_set_value(ec->enable_gpio, 0)` 注释掉（保留 `EC_STANDBY_ENTER`），
+   EC 保持绑定做真实挂起。解绑整个驱动能好，说明问题在这两件事之一；
+   这一步能把它劈开，而且只要一次构建。
+2. 若还不行：把 EC 的 suspend/resume 回调整个去掉（`.pm = NULL`）再试 ——
+   等价于"绑定但不参与 PM"，可以判定问题是否只在 PM 回调里。
+3. 拿到 7.1 的源码（`linux-gaokun` 对应 tag）逐字 diff
+   `huawei-gaokun-ec.c`；本机的 mainline 树是**浅克隆**（22 个提交、只有
+   `v7.2-rc2` 一个 tag），要比历史得先 `git fetch --unshallow`。
+4. 实用旁路：EC 解绑状态下挂起是可用的，但会失去盖子/电池上报 —— 不适合发布。
+
