@@ -58,3 +58,4 @@ device/huawei/gaokun3/hexagonrpcd-root/**
 # ⚠️ 同 firmware/ 一样【整目录忽略 + 只放行 README.md】。
 device/huawei/gaokun3/prebuilt-boot/**
 !device/huawei/gaokun3/prebuilt-boot/README.md
+!device/huawei/gaokun3/prebuilt-boot/android-7.2.0-rc2-gaokun3.config
