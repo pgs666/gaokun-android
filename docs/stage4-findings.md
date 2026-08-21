@@ -1436,19 +1436,82 @@ v2 顺序改对了，机器随即从 USB 与网络上同时消失，**并且没�
 我还在 v2 里删掉了 v1 有的 RTC 兜底闹钟，等于把第二道网也拆了。
 **后果：需要人按一次电源键**，违反了本项目"永不留下需要到机器旁的状态"这条纪律。
 
+### ★★ 二分结果（2026-08-21 第二轮，工具就位后）
+
+`pm_test` 逐层跑下来，**第一个失败的层是 `devices`**：
+
+| 层 | 结果 |
+|---|---|
+| `freezer` | ✅ **rc=0、`suspend_stats/success=1`**，多次复现 —— PM 核心、进程冻结、
+  `PM_SUSPEND_PREPARE` 通知链都是好的 |
+| `devices` | ❌ 失败（下面分两种情形）|
+
+#### 情形 A：WiFi 关联着 —— ath11k 的 suspend 回调卡死（有完整栈）
+
+DPM_WATCHDOG 在 10 秒时开火，panic 落进 efi_pstore，栈是完整的：
+
+```
+Kernel panic - not syncing: ieee80211 phy0: unrecoverable failure
+ieee80211 phy0: PM: **** DPM device timeout ****
+  ath11k_mac_flush_tx_complete
+  ath11k_mac_op_flush
+  __ieee80211_flush_queues
+  ieee80211_set_disassoc → ieee80211_mgd_deauth → cfg80211_disconnect
+  cfg80211_leave
+  wiphy_suspend                ← suspend 回调本身
+  dpm_run_callback / device_suspend / async_suspend
+```
+
+而它之前几秒，固件就已经不理人了：
+
+```
+[64.73] ath11k_pci: Timeout in receiving vdev delete response
+[64.73] ath11k_pci: failed to delete vdev 1: -110
+[67.80] ath11k_pci: wmi command 36865 timeout
+[67.80] ath11k_pci: failed to setup ps on vdev 0: -11
+```
+
+★ **这是一个具体、可上报的 ath11k 缺陷，而且是挂起路上的第一道坎。**
+⚠️ 顺带说明 M4 为什么没抓到它：M4 逐个卸掉的是 himax / 三个 remoteproc / EC
+驱动，**唯独没试过 ath11k**。
+
+#### 情形 B：ath11k（以及 EC 驱动）都解绑之后 —— 静默整板复位
+
+`devices` 层仍然失败，但**不再 panic**：pstore 0 条，机器在进入该层后
+**约 26 秒**整板复位。而这个测试本该 5–6 秒结束
+（挂设备 + `mdelay(5s)` + 恢复设备）。
+
+★ **这不是回调卡死。** 三个阶段都装了看门狗（10 秒）却一次都没开火：
+`device_suspend` 与 `device_resume` 上游本来就有；`device_prepare` 上游**没有**
+（`dpm_watchdog_set` 只出现在 `main.c` 的 1133 与 1986 两处），
+我为此专门打了一个取证补丁给它也装上 —— **仍然不开火**。
+
+★★ **而且不存在硬件看门狗**：前一次那个 panic（`panic_timeout=0`）让机器
+在 panic 上停了**一个多小时**都没自己复位。所以那 26 秒不是板载看门狗，
+是挂起路径自己把板子搞复位了。
+
+#### 剩下的嫌疑面：`suspend_console()` / `resume_console()` / `dpm_complete()`
+
+把 `pm_test=devices` 走到的代码逐段划掉之后，看门狗覆盖不到的只剩这三处。
+一个值得注意的巧合：SLPI 那条良性噪声
+（`Handover signaled, but it already happened`，#37 已定性）**每秒刷 5 条**，
+dmesg 里累计上千条 —— `resume_console()` 要把积压的 printk 一次性冲到 DRM
+控制台上。
+
+⚠️ **加 `no_console_suspend` 之后失效模式确实变了**：不再是 26 秒复位，
+而是**机器停住不再回来**（`panic=10` 也救不了，因为没有 panic）。
+**"改了控制台行为 → 失效模式改变"本身就说明控制台这条路参与其中**，
+但它把一个会自愈的故障变成了不会自愈的，所以下一步要换个更安全的靶场再查。
+
 ### 这一轮实际得到的东西
-
-* 工具链就位且已入库：再做这件事**不需要先自己编一个内核**。
-* ★ **"停住"本身是新信息**：M4 观察到的是"20–40 秒后整机复位"，
-  而这次是**永久停住** —— 与"#19 没有 DPM_WATCHDOG、#20 有"完全吻合，
-  说明看门狗**开火了**，也就说明**确实有一个设备的 suspend/resume 回调卡住**
-  （而不是别的层）。这比 M4 的"resume 失败"精确了一格。
-* ★ **证据大概率已经留下**：pstore 走 efi_pstore（EFI 变量），**跨重启存活**，
-  且与哪个内核启动无关。下一次启动后读 `/sys/fs/pstore/`
-  （Ubuntu 侧是 `/var/lib/systemd/pstore/`）就能拿到卡住那个回调的栈。
-
 ### 下次动手的正确姿势
 
+0. ⚠️★ **不要在 Android 侧连续做会失联的实验。** 我这一轮把机器弄到需要人
+   按电源键**两次**。`panic=10` 只能救"真的 panic"那一类；情形 B 里机器
+   要么静默复位（能自愈）、要么直接停住（不能）。
+   **正确的靶场是救援 Ubuntu** —— 它是 `default` 项，任何结局都落回一个
+   可远程接入的系统，而且没有 SystemSuspend 来抢挂起、不用绕 wakelock。
+   代价只是给 Ubuntu 那套配一份带 PM_DEBUG 的内核。
 1. **测试条目的 cmdline 必须带 `panic=10`**，并保留 RTC 兜底闹钟。
 2. 更好的做法是**在救援 Ubuntu 里跑这套二分**，而不是 Android：
    Ubuntu 是 `default` 项，任何挂死/复位都落回一个可远程接入的系统；
