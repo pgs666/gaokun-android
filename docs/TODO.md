@@ -97,26 +97,29 @@
 且 `WiredAccessoryManager` 在 SystemServer 启动时只读一次，框架层也没有
 插拔模拟命令可用。
 
-### A9. ★s2idle 醒不回来 —— 工具已就位，下一步是读 pstore
-详见 [#45](stage4-findings.md)（以及 M4 的定性）。**内核 #20 已带
-`CONFIG_PM_DEBUG` / `PM_SLEEP_DEBUG` / `PM_ADVANCED_DEBUG` / `EXPERT` /
-`DPM_WATCHDOG`**，`/sys/power/pm_test` 实机可用，配置已固化进
-`scripts/kernel-config-android.sh` —— **再做这件事不需要先自己编内核**。
+### A9. ★s2idle：第一个失败层已定位到 `devices`，并拆成两个独立问题
+详见 [#45](stage4-findings.md)。工具已就位（内核带 `PM_DEBUG`/`DPM_WATCHDOG`，
+`/sys/power/pm_test` 可用，配置已固化）——**再做不需要先编内核**。
+`freezer` 层实测 rc=0 / `success=1`，所以 PM 核心是好的。
 
-★ 这一轮的新信息：以前是"20–40 秒后复位"，这次装了 DPM_WATCHDOG 之后变成
-**永久停住** —— 说明看门狗开火了，也就说明**确实有一个设备的 suspend/resume
-回调卡住**，而不是别的层。比"resume 失败"精确了一格。
+**问题 1（有具体栈，可上报上游）**：WiFi 关联时 `ath11k` 的 suspend 回调卡死 ——
+`wiphy_suspend → cfg80211_leave → ieee80211_set_disassoc → ath11k_mac_op_flush`，
+之前几秒固件已 `wmi command timeout`。这是挂起路上的第一道坎。
+**第一步**：查 ath11k 上游有无相关修复；否则给 `ath11k_mac_op_flush` 的等待
+加超时是最小改动。M4 当年没试过卸 ath11k，所以漏了它。
 
-**第一步（下次开机后立刻做，别先重跑测试）**：
-读 `/sys/fs/pstore/`（Ubuntu 侧 `/var/lib/systemd/pstore/`）——
-DPM_WATCHDOG 的 panic 会把**卡住那个回调的栈**记在里面，走 efi_pstore
-（EFI 变量），跨重启存活。那可能直接就是答案。
+**问题 2（更难）**：把 ath11k 与 EC 驱动都解绑后，`devices` 层仍失败，
+但变成**静默整板复位（约 26 秒）**，三个阶段的 10 秒看门狗都不开火
+（我连上游没有的 `device_prepare` 看门狗都补上了）。也**不是硬件看门狗** ——
+一次 `panic_timeout=0` 的 panic 让机器停了一个多小时都没复位。
+剩下的嫌疑面只有 `suspend_console()` / `resume_console()` / `dpm_complete()`；
+加 `no_console_suspend` 会改变失效模式（复位 → 停住），说明控制台这条路有份。
 
-**第二步**：重跑二分时必须补两道网 ——
-测试条目 cmdline 加 **`panic=10`**（整个机制就是要 panic，panic 之后得自己回来），
-并保留 RTC 兜底闹钟。⚠️ 我这次两道网都没有，结果需要人按一次电源键。
-更好的做法是**在救援 Ubuntu 里跑**：它是 `default` 项，挂死也落回可远程接入的
-系统，而且没有 SystemSuspend 来抢挂起。
+**第一步**：⚠️ **换靶场到救援 Ubuntu 再查**。它是 `default` 项，任何结局都落回
+可远程接入的系统，而且没有 SystemSuspend 抢挂起。我在 Android 侧连做实验，
+把机器弄到需要人按电源键两次。给 Ubuntu 配一份带 PM_DEBUG 的内核即可。
+**第二步**：在那里给 `dpm_complete()` 也加看门狗，并试着把 SLPI 那条每秒 5 条的
+噪声静音后重测（`resume_console()` 要冲刷上千条积压 printk）。
 
 ### A5. 恢复出厂设置不起作用
 设置里那条路走 misc 的 BCB + recovery，而本机没有可用 recovery
