@@ -1521,3 +1521,85 @@ dmesg 里累计上千条 —— `resume_console()` 要把积压的 printk 一次
    一层一次、每层前把层名写进标记文件（v2 这么做了，这一点是对的）。
 4. 先读 pstore 再重跑 —— 上一次的 panic 栈可能已经直接给出答案。
 
+
+## #46 s2idle 第三轮：靶场搬到救援 Ubuntu，把"问题 2"逼到内核可见范围之外（2026-08-21）
+
+#45 把 s2idle 拆成两个问题之后，这一轮按自己写下的教训**把靶场从 Android 换到
+救援 Ubuntu**。结论先说：**问题 2 不是驱动缺陷，它发生在内核看得见的范围之下。**
+
+### 靶场本身就是这一轮最大的改进
+
+`default` 指向普通 Ubuntu 条目，测试用的是另一个条目（同一份 PM 调试内核 + `panic=10`），
+靠 `bootctl set-oneshot` 进入。于是**每一次失败都自动落回一个可远程接入的系统**，
+一轮实验从"要人按电源键"变成"约 3 分钟一次、全自动"。
+`scripts` 里没有留这套东西（一次性的），但方法记在这里：
+
+* Ubuntu 侧可以直接 `sudo bootctl set-oneshot <entry>` —— 比在 Android 里写
+  EFI 变量省事得多。
+* `journalctl --list-boots` + `journalctl -b -1 -k` 能读上一次启动的内核日志
+  （该机 `/var/log/journal` 存在，journald **是持久化的**）。
+
+### 排除清单（每一条都是一次实机实验）
+
+| 实验 | 结果 |
+|---|---|
+| `pm_test=freezer` | ✅ `rc=0`、`suspend_stats/success=1`（Android 与 Ubuntu 都是）|
+| `pm_test=devices` 基线 | ❌ 静默整板复位 |
+| 解绑整个显示栈（`msm_dpu`/`msm_dsi`/`msm-dp-display`/`msm-mdss`，DRM 卡剩 0）| ❌ 照样复位 |
+| 解绑 `ath11k_pci`（wiphy 消失）| ❌ 照样复位 |
+| 解绑 `gaokun-ec` | ❌ 照样复位 |
+| 三个 remoteproc 全 `stop`（offline/offline/offline）| ❌ 照样复位 |
+| **以上四项同时做** | ❌ **照样复位** |
+| **真实挂起**（`pm_test=none` + RTC 闹钟，全部设备保持绑定）| ❌ 复位，**零取证** |
+
+### ★ 关键否定证据
+
+* **没有任何驱动回调卡住。** 三个阶段都有 10 秒 DPM 看门狗
+  （`device_suspend`/`device_resume` 上游自带，`device_prepare` 是我加的取证补丁），
+  **一次都没开火**，pstore 始终 0 条。
+* **不是硬件看门狗。** `/sys/class/watchdog/watchdog0` 存在但没人喂
+  （systemd `RuntimeWatchdogUSec=0`），而机器能稳定运行几分钟不复位；
+  更硬的证据是 #45 那次 `panic_timeout=0` 的 panic 让机器**停了一个多小时**都没复位。
+* **持久 journald 也救不了那个窗口**：挂起一开始 userspace 就被冻结，
+  上一次启动的内核日志停在挂起前一刻，之后什么都没有。
+* ⚠️ **一次无效实验，记下来免得被当成结论**：我试过"挂起前把 CPU 压到最低频"
+  来验证欠压假设，但 `powersave` 调速器没真的把频率降下来
+  （`scaling_cur_freq` 仍是 1670400 / 2688000），**所以那次测试不算数**，
+  欠压假设既没被证实也没被证否。
+
+### 顺带读到的 EC 挂起时序（不是元凶，但值得记）
+
+`refs/gaokun-buildbot/drivers/gaokun-ec/huawei-gaokun-ec.c:623`：
+
+```c
+static int gaokun_ec_suspend(struct device *dev)
+{
+	u8 ec_req[] = MKREQ(0x02, EC_STANDBY_REG, 1, EC_STANDBY_ENTER);
+	ret = gaokun_ec_write(ec, ec_req);      /* 告诉 EC「要进 standby」 */
+	msleep(100);
+	gpiod_set_value(ec->enable_gpio, 0);    /* ★ 把 EC 的使能脚拉低 */
+```
+
+resume 反过来（拉高 → `msleep(100)` → 最多重试三次 `EC_STANDBY_EXIT`），
+注释还写着 "Resume may be unstable, so open lid anyways"。
+⚠️ **但解绑 EC 驱动（这段完全不执行）之后照样复位**，所以它不是触发点。
+
+### 现在的判断
+
+**问题 2 = 平台/固件层面的复位**，内核在它发生前没有任何机会记录。
+继续用"解绑再试"已经没有信息量了 —— 能解绑的都排除完了，剩下的是时钟、稳压器、
+interconnect、PCIe/NVMe、pinctrl、rpmhpd 这些拆不掉的核心件。
+
+**下一步应该换一类工具，而不是继续这条路：**
+
+1. ★ **对照 ThinkPad X13s。** 同 SoC、主线内核上 s2idle **是能用的**（jhovold 树）。
+   所以差异一定在 gaokun 的 DT / 固件 / EC 上。把两边的 DTS 与 suspend 相关节点
+   （rpmhpd、AOSS、smp2p、pdc 唤醒映射）逐项对照，比在本机瞎试有效得多。
+   ⚠️ 注意 `recommended/0017-arm64-dts-qcom-sc8280xp-add-several-missing-pdc-map-.patch`
+   已经在 buildbot 的应用列表里，但**还有 `0018-HACK-pinctrl-qcom-sc8280xp-do-not-map-gpio175-to-pdc`**
+   —— 这类 PDC 唤醒映射的差异正是 s2idle 的常见坑，值得先看。
+2. 若要继续在本机取证，唯一还没用过的通道是 **USB gadget 串口控制台**
+   （`g_serial` + `console=ttyGS0`），从 PC 端读。代价不小，而且 UDC 自己也会挂起。
+3. **问题 1（ath11k）与问题 2 是独立的**，可以先把问题 1 报给上游 / 自己修 ——
+   它有完整栈，不依赖问题 2 的进展。
+

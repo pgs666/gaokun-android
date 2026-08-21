@@ -97,29 +97,34 @@
 且 `WiredAccessoryManager` 在 SystemServer 启动时只读一次，框架层也没有
 插拔模拟命令可用。
 
-### A9. ★s2idle：第一个失败层已定位到 `devices`，并拆成两个独立问题
-详见 [#45](stage4-findings.md)。工具已就位（内核带 `PM_DEBUG`/`DPM_WATCHDOG`，
-`/sys/power/pm_test` 可用，配置已固化）——**再做不需要先编内核**。
-`freezer` 层实测 rc=0 / `success=1`，所以 PM 核心是好的。
+### A9. ★s2idle：已拆成两个独立问题，问题 2 已逼到内核可见范围之外
+案卷 [#45](stage4-findings.md)、[#46](stage4-findings.md)。工具已就位并固化
+（内核带 `PM_DEBUG`/`DPM_WATCHDOG`，`/sys/power/pm_test` 可用）——
+**再做不需要先编内核**。`freezer` 层实测 `rc=0`/`success=1`，PM 核心是好的。
 
-**问题 1（有具体栈，可上报上游）**：WiFi 关联时 `ath11k` 的 suspend 回调卡死 ——
+**问题 1 —— ath11k 的 suspend 回调卡死（有完整栈，可独立推进）**
 `wiphy_suspend → cfg80211_leave → ieee80211_set_disassoc → ath11k_mac_op_flush`，
-之前几秒固件已 `wmi command timeout`。这是挂起路上的第一道坎。
-**第一步**：查 ath11k 上游有无相关修复；否则给 `ath11k_mac_op_flush` 的等待
-加超时是最小改动。M4 当年没试过卸 ath11k，所以漏了它。
+之前几秒固件已 `wmi command timeout`。这是 WiFi 关联时挂起路上的第一道坎。
+**第一步**：查 ath11k 上游有无修复；否则给 `ath11k_mac_op_flush` 的等待加超时
+是最小改动。⚠️ M4 当年逐个卸的是 himax/remoteproc/EC，唯独没试 ath11k，所以漏了它。
 
-**问题 2（更难）**：把 ath11k 与 EC 驱动都解绑后，`devices` 层仍失败，
-但变成**静默整板复位（约 26 秒）**，三个阶段的 10 秒看门狗都不开火
-（我连上游没有的 `device_prepare` 看门狗都补上了）。也**不是硬件看门狗** ——
-一次 `panic_timeout=0` 的 panic 让机器停了一个多小时都没复位。
-剩下的嫌疑面只有 `suspend_console()` / `resume_console()` / `dpm_complete()`；
-加 `no_console_suspend` 会改变失效模式（复位 → 停住），说明控制台这条路有份。
+**问题 2 —— 平台层面的静默整板复位（本机自有手段已用尽）**
+排除清单（每条都是实机实验，且**同时解绑四项后仍复位**）：显示栈、ath11k、
+EC、三个 remoteproc。三个阶段的 10 秒 DPM 看门狗（含我给 `device_prepare` 补的）
+**一次都没开火**、pstore 始终 0 条 ⇒ **没有任何驱动回调卡住**。
+也不是硬件看门狗（一次 `panic_timeout=0` 的 panic 让机器停了一个多小时没复位）。
+真实挂起同样是**零取证**的复位。
 
-**第一步**：⚠️ **换靶场到救援 Ubuntu 再查**。它是 `default` 项，任何结局都落回
-可远程接入的系统，而且没有 SystemSuspend 抢挂起。我在 Android 侧连做实验，
-把机器弄到需要人按电源键两次。给 Ubuntu 配一份带 PM_DEBUG 的内核即可。
-**第二步**：在那里给 `dpm_complete()` 也加看门狗，并试着把 SLPI 那条每秒 5 条的
-噪声静音后重测（`resume_console()` 要冲刷上千条积压 printk）。
+**第一步（换工具，别再解绑）**：★ **对照 ThinkPad X13s** —— 同 SoC、主线上
+s2idle 是能用的，所以差异在 gaokun 的 DT/固件/EC。优先逐项比对 suspend 相关节点
+（rpmhpd、AOSS、smp2p、**PDC 唤醒映射**）。注意 `recommended/0018-HACK-pinctrl-
+qcom-sc8280xp-do-not-map-gpio175-to-pdc` 这类 PDC 映射 HACK 正是 s2idle 的常见坑。
+**若仍要在本机取证**：唯一没用过的通道是 USB gadget 串口控制台
+（`g_serial` + `console=ttyGS0`），代价不小且 UDC 自己也会挂起。
+
+⚠️ **靶场纪律**：这类实验只在**救援 Ubuntu** 里做 —— `default` 指普通 Ubuntu，
+失败自动落回可远程接入的系统，一轮约 3 分钟全自动。在 Android 里做会把机器
+弄到需要人按电源键（我这轮踩过两次）。
 
 ### A5. 恢复出厂设置不起作用
 设置里那条路走 misc 的 BCB + recovery，而本机没有可用 recovery
