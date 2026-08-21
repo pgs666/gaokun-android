@@ -1641,6 +1641,28 @@ lid wakeup, EC may stop suspend with a 0xc0 event`。我们复现不了"works"�
   我们现在能给出的是"挂起成功、三种唤醒源全部导致整板复位、无任何取证"，
   这比"不能待机"有用得多。
 
+### 排除清单（截至本轮，每一条都是实机实验）
+
+| 假设 | 怎么测的 | 结果 |
+|---|---|---|
+| 驱动的 suspend/resume 回调卡住 | 三个阶段各 10 秒 DPM 看门狗（`device_prepare` 那个是本轮加的取证补丁）| ❌ 从未开火，pstore 始终 0 条 |
+| 显示栈 | 停 gdm 后解绑 `msm_dpu`/`msm_dsi`/`msm-dp-display`/`msm-mdss`，DRM 卡剩 0 | ❌ 照样复位 |
+| ath11k | 解绑 `ath11k_pci`，wiphy 消失 | ❌ 照样复位 |
+| 华为 EC | 解绑 `gaokun-ec 15-0038` | ❌ 照样复位 |
+| 三个 remoteproc | 全部 `echo stop`（offline）| ❌ 照样复位 |
+| **以上四项同时** | 一次全做 | ❌ **照样复位** |
+| 我们的 Android 内核配置 | 换成 Ubuntu 自带的 `#2` 内核（上游配置）| ❌ 一模一样 |
+| Android 的 SystemSuspend / wakelock | 整套改在 Ubuntu 上重做 | ❌ 一模一样 |
+| 硬件看门狗 | `watchdog0` 没人喂而机器稳定运行；一次 `panic_timeout=0` 的 panic 让机器停了一个多小时没复位 | ❌ 不存在这样的看门狗 |
+| 控制台挂起/恢复 | 加 `no_console_suspend` | ⚠️ **失效模式变了**（复位 → 停住），说明这条路参与其中，但没解决 |
+| ★ **CPU rail power collapse** | 把 8 个 CPU 的 `cpuidle/state1/disable` 全设为 1（只留 WFI），再带 RTC 闹钟真实挂起 | ❌ **照样复位** |
+
+★ 最后一条值得单独说：本机 cpuidle 只有两级 —— `state0 = WFI`、
+`state1 = cpu-sleep-N-0（little/big-rail-power-collapse，退出延迟 1264 µs）`，
+驱动是 `psci_idle`。"s2idle 期间 CPU 进入 PSCI 电源塌陷、而本平台从该状态退出
+是坏的"是个很对症的假设（正好解释"睡得下去、任何唤醒都复位"），
+**但实测把它禁掉之后照样复位**，所以不是它。
+
 ### 仍然没有取证手段（已穷尽本机自有通道）
 
 * 三个阶段的 10 秒 DPM 看门狗（`device_prepare` 那个是本轮加的取证补丁）
