@@ -1754,7 +1754,11 @@ Android 不加载模块）。唯一一条语义上直接相关的是：
    —— 代价是 Venus（7.2 的补丁）与其他 7.2 特性，需要评估补丁能否回移。
 
 
-## #49 ★★★ s2idle 元凶定位到 **EC 驱动的 suspend/resume**（2026-08-21）
+## #49 s2idle 收敛到 **EC 绑定与否**（2026-08-21）
+
+> ⚠️★ **本节原标题是「元凶定位到 EC 驱动的 suspend/resume」，已被 #50 推翻。**
+> EC 驱动在 v7.1 → v7.2-rc2 之间**只改了一行纯风格代码**，不可能是回归所在；
+> 真正的 delta 在 **geni I²C 的 `*_noirq` 回调**上。下面的**实测数据全部仍然成立**（包括“解绑 EC 就能挂起”与两个 `pm_test` 更正），只是归因错了。
 
 接 #48（7.1 能挂起）。这一轮把范围收到了一个驱动上。
 
@@ -1815,16 +1819,499 @@ CPU power collapse）**全部是用 `pm_test=devices` 做的，因此全部作�
 **我们自己编的**。判断内核出处要看 `strings vmlinuz | grep "Linux version"`
 里的构建者字段，不能只看 `uname -v` 的 `#N`。
 
-### 下一步（按性价比排序）
+### 下一步 → 已在 #50 里做完
 
-1. ★ **最便宜、最对症**：把 `gaokun_ec_suspend()` 里那句
-   `gpiod_set_value(ec->enable_gpio, 0)` 注释掉（保留 `EC_STANDBY_ENTER`），
-   EC 保持绑定做真实挂起。解绑整个驱动能好，说明问题在这两件事之一；
-   这一步能把它劈开，而且只要一次构建。
-2. 若还不行：把 EC 的 suspend/resume 回调整个去掉（`.pm = NULL`）再试 ——
-   等价于"绑定但不参与 PM"，可以判定问题是否只在 PM 回调里。
-3. 拿到 7.1 的源码（`linux-gaokun` 对应 tag）逐字 diff
-   `huawei-gaokun-ec.c`；本机的 mainline 树是**浅克隆**（22 个提交、只有
-   `v7.2-rc2` 一个 tag），要比历史得先 `git fetch --unshallow`。
-4. 实用旁路：EC 解绑状态下挂起是可用的，但会失去盖子/电池上报 —— 不适合发布。
+当时列的四条，现在的下落：
 
+1. ❌ 只去掉 `gpiod_set_value(ec->enable_gpio, 0)` —— 被第 2 条覆盖。
+2. ❌ **EC 的 PM 回调整个 `return 0`：照样整板复位**（实验 #24）—— PM 回调被排除。
+3. ✅ **拿 7.1 源码逐字 diff —— 这一条是对的，而且直接找出了元凶**。浅克隆只需 `git fetch --depth=1 --no-tags origin tag v7.1`（不必 `--unshallow`）。
+4. ⚠️ “解绑 EC 当旁路”不再需要 —— 见 #50 的真修复。
+
+★ **方法论（贵买的）**：碰上“旧版本行、新版本不行”的回归，**先把两个版本的相关驱动 diff 出来看改动量**，比在实机上一个一个试候选便宜一个数量级：本例里 EC 驱动 1 行、geni 一共 263 行，一眼就知道该看哪个。
+
+---
+
+## #50 ★★★ s2idle 元凶改判：不是 EC 驱动，是 **7.1→7.2 的 geni I²C noirq 重构**（2026-08-21）
+
+接 #49。这一轮把 #49 的**标题结论推翻了**，并给出了一个有源码依据的新元凶。
+
+### 先说三个把 #49 打掉的事实
+
+**1. EC 的 PM 回调整个 return 0，照样整板复位。**
+
+`gaokun_ec_suspend()` / `gaokun_ec_resume()` 开头直接 `return 0`（EC 保持绑定、
+中断照常注册、子设备照常在），实验 #24：
+
+```
+[up=91] EC 绑定=1  子设备=2
+[up=91] PRE 真实挂起
+（无 POST —— 复位进 Android）
+```
+
+⇒ **EC 的 PM 回调被完全排除**。#49 的"下一步 1/2"至此都做完了，两条都是阴性。
+
+**2. ★ EC 的中断根本不走 tlmm 的 wakeirq 映射表。**
+
+```
+interrupts-extended = <&pdc 215 IRQ_TYPE_LEVEL_LOW>;
+enable-gpios = <&tlmm 173 GPIO_ACTIVE_HIGH>;
+// not stable yet, so comment out it
+// wakeup-source;
+```
+
+我按 buildbot 那个 `HACK: do not map touchscreen's IRQ to PDC`（它的提交说明原文
+是"too many wakeup IRQs are unmasked … fix impact from **new added EC wakeup
+IRQ**"）依样画葫芦，把 `{ 107, 217 }` 从 `sc8280xp_pdc_map[]` 里删掉重编 ——
+实验 #25 照样复位。
+
+⚠️ **这是一次我自己的错误**：EC 用的是 `&pdc 215`，**直连 PDC**，
+跟 tlmm 107 毫无关系。花了一次构建 + 一次实机测试测了个无关变量。
+★ 教训：**动手改一个引脚号之前，先把 DTS 里那一行读出来贴上**，
+不要从"同类补丁"倒推脚号。
+
+**3. ★★ EC 驱动在 v7.1 → v7.2-rc2 之间只改了一行，而且是纯风格的。**
+
+```diff
+ static const struct i2c_device_id gaokun_ec_id[] = {
+-	{ "gaokun-ec", },
++	{ .name = "gaokun-ec" },
+```
+
+⇒ 既然 7.1 能挂起、7.2 不能，而 EC 驱动**功能上一字未变**，
+**回归就不可能在 EC 驱动里。** EC 只是受害者/触发者。
+
+### ★★★ 新元凶：`i2c-qcom-geni.c` 的 `*_noirq` 回调被重写
+
+`git diff v7.1 v7.2-rc2` 在四个相关驱动上的规模，一眼就能看出该看哪个：
+
+| 文件 | 改动量 |
+|---|---|
+| `drivers/platform/arm64/huawei-gaokun-ec.c` | 1 +/1 −（纯风格） |
+| `drivers/i2c/busses/i2c-qcom-geni.c` | 11 +/13 − |
+| **`drivers/soc/qcom/qcom-geni-se.c`** | **252 +/18 −** |
+| `drivers/irqchip/qcom-pdc.c` | 40 +/23 − |
+
+`qcom-geni-se.c` 新导出了一整套 `geni_se_resources_activate/deactivate`、
+`geni_se_set_perf_level/opp`、`geni_se_domain_attach`、`geni_icc_set_bw_ab`
+—— 是一次 geni 资源管理的重构。而 i2c 侧的落点正是挂起路径：
+
+```diff
+ static int geni_i2c_suspend_noirq(struct device *dev)
+ {
+ 	i2c_mark_adapter_suspended(&gi2c->adap);
+-	if (!gi2c->suspended) {
+-		geni_i2c_runtime_suspend(dev);      /* ← 返回值被丢弃 */
+-		pm_runtime_disable(dev);
+-		pm_runtime_set_suspended(dev);
+-		pm_runtime_enable(dev);
+-	}
+-	return 0;
++	ret = pm_runtime_force_suspend(dev);
++	if (ret)
++		i2c_mark_adapter_resumed(&gi2c->adap);
++	return ret;                                 /* ← 现在会传播错误 */
+ }
+
+ static int geni_i2c_resume_noirq(struct device *dev)
+ {
++	ret = pm_runtime_force_resume(dev);         /* ← 7.1 里【什么都不做】 */
++	if (ret)
++		return ret;
+ 	i2c_mark_adapter_resumed(&gi2c->adap);
+ 	return 0;
+ }
+```
+
+**两处语义变化，各自解释一个我们实测到的症状：**
+
+* ★ `resume_noirq` 现在会 `pm_runtime_force_resume()` —— 也就是在
+  **noirq 阶段**真的去把控制器供上电（`core_clk` + 三条 interconnect 票 + OPP）。
+  7.1 里这个函数只打了个 `i2c_mark_adapter_resumed` 标记，控制器一直停在
+  runtime-suspended，等下一次传输再懒加载。**noirq 阶段中断还关着、供应方
+  （rpmh / interconnect / 电源域）不保证已恢复**，此时摸 geni 寄存器就是
+  未上电访问 → 整板复位。**这与"睡得下去、任何唤醒都复位"完全吻合。**
+* ★ `suspend_noirq` 现在传播 `geni_i2c_runtime_suspend()` 的错误，
+  而 7.1 把它丢掉了。**这正好解释纯 7.2 上那个"干净失败"**：
+  `last_failed_dev=15-0038` / `step=suspend_noirq` / `errno=-110` +
+  `geni_i2c a9c000.i2c: Timeout abort_m_cmd` —— 同样的超时在 7.1 上会被咽掉。
+
+### ★ 顺带解释了"解绑 EC 就能挂起"
+
+`pm_runtime_force_suspend()` 只有在设备**当时是 runtime-active** 的情况下才会
+置 `needs_force_resume`，从而让 `force_resume` 真的去上电。
+EC 解绑后 `a9c000.i2c` 上没有任何用户，长期停在 runtime-suspended
+→ `force_suspend` 什么都不做 → `force_resume` 也什么都不做 → **不会有
+noirq 阶段的未上电访问** → 挂起唤醒正常。
+
+⇒ **"EC 是元凶"其实是"EC 是那条 I²C 总线上唯一的用户"的假象。**
+
+### 决定性实验（实验 #26）
+
+把 `i2c-qcom-geni.c` 的 `suspend_noirq`/`resume_noirq`（连同 `gi2c->suspended`
+标志）**逐字还原成 v7.1**，其余一切不动（我们完整的 7.2 + buildbot 补丁、
+EC 全绑定、PM 回调原版），连做 3 次真实挂起。
+
+```
+[03:54:58 up=51] START #26  实验=EC 全绑定，i2c-qcom-geni 的 noirq 语义还原到 v7.1
+[03:55:38 up=91] EC 绑定=1  子设备=2
+[03:55:38 up=91] PRE 第 1 次真实挂起
+（无 POST —— 复位进 Android）
+```
+
+**❌ 阴性。** 上面那套听起来严丝合缝的推理**是错的**，或者至少不完整。
+
+### ⚠️ 连带查证：geni 的另外两处改动对本机也不成立
+
+顺着"7.2 重构了 geni 资源管理"继续查，还找到两个看着很像的东西，
+**逐个核对后都不成立**，一并记下来免得后人再走一遍：
+
+* `geni_se_clks_off()` 在 7.2 里**新增了 `clk_disable_unprepare(se->core_clk)`**，
+  而 `i2c-qcom-geni.c` 里那句 `clk_disable_unprepare(gi2c->core_clk)` 还在
+  —— 看起来像典型的"引用计数下溢把还在用的时钟关掉"。
+  ❌ **不成立**：`gi2c->core_clk` 只在 `desc->has_core_clk` 时才取，
+  而 `.has_core_clk = true` **只属于 `qcom,geni-i2c-master-hub`**
+  （`i2c-qcom-geni.c` 的 `i2c_master_hub` desc）。本机 EC 那条总线是普通
+  `qcom,geni-i2c` → `gi2c->core_clk` 为 NULL → 那句是空操作。
+* `geni_icc_get()` 被重写（DDR 路径改成可选、错误处理换 `dev_err_probe`），
+  ❌ 纯重构，行为等价。
+
+### ★ 这一轮真正确立的东西
+
+1. **不是 EC 的 PM 回调**（#24）。
+2. **不是 EC 驱动本身**——7.1→7.2 只改了一行风格代码。
+3. **不是 `i2c-qcom-geni.c` 的 noirq 语义**（#26）。
+4. ★ **这些复位【不经过内核】**：查了 `/sys/fs/pstore`、efivars 的 dump 条目、
+   以及 Ubuntu 的 `/var/lib/systemd/pstore/` —— 最新记录停在**前一天**，
+   今天十几次复位**一条都没留下**。
+   ⇒ 不是 panic、不是 oops，是**固件/TZ 级硬复位**，
+   典型成因是未上电寄存器访问或 XPU 违例。
+   ★ 这条也说明：**想靠内核日志抓现场是徒劳的**，别再往那个方向花时间。
+5. ★ **EC 的中断是 `<&pdc 215>`，而且它的处理函数是【线程化】的**
+   （`devm_request_threaded_irq(..., NULL, gaokun_ec_irq_handler, IRQF_ONESHOT, ...)`）。
+   `resume_device_irqs()` 一放开，它就会立刻发起一次 I²C 传输，
+   而那时**只跑完了 noirq 阶段**。这是"绑定 vs 解绑"仅存的具体差异。
+
+### 实验 #27：EC 绑定但**根本不申请中断** —— 照样复位
+
+`gaokun_ec_probe()` 里那句 `devm_request_threaded_irq()` 用 `if (0)` 跳过，
+其余（子设备、hwmon、enable-gpio、PM 回调）全部原样：
+
+```
+[04:04:19 up=91] EC 绑定=1  子设备=2
+[04:04:19 up=91] i2c 运行时状态: a9c000=suspended
+[04:04:19 up=91] PRE 第 1 次真实挂起
+（无 POST —— 复位）
+```
+
+**❌ 中断也被排除。** 顺带这一行 `a9c000=suspended` 还从另一个方向否掉了
+geni 假说：控制器本来就停在 runtime-suspended，
+`pm_runtime_force_suspend/resume` 对它是空操作。
+
+### ⚠️★ 一个逻辑缺口：#49 那句"解绑 EC 就能挂起"证明力没有看上去那么强
+
+复盘 #49 的对照表会发现：
+
+| 内核 | EC | 结果 |
+|---|---|---|
+| 纯 7.2 | 绑定 | **干净失败**（-110 @ suspend_noirq，压根没睡着）|
+| 纯 7.2 | 解绑 | ✅ 挂起+唤醒 4/4 |
+| **我们的 7.2** | 绑定 | ❌ **睡着了，任何唤醒都复位** |
+| 我们的 7.2 | **解绑** | **从未测过** |
+
+★ 纯 7.2 上"绑定"那一格**根本没进到 resume**，所以那组对照证明的只是
+"解绑消掉了 -110"，**并不能证明"解绑能消掉复位"**。
+⇒ 缺的对照是【我们自己的内核 + EC 解绑】。这是实验 #28。
+
+★ **方法论**：对照实验的两格如果**失败模式不同**（一个是干净 abort、
+一个是硬复位），那它们比较的就不是同一件事，别把结论跨过去用。
+
+### ★★★ 实验 #28：补上那个缺失的对照 —— **EC 解绑照样复位**
+
+我们自己的干净内核（`#29` 构建，只带常驻的 venus/dts/staging 改动），
+开机后先把 EC 整个解绑再挂起：
+
+```
+[04:08:14 up=91] 内核: #29  EC 绑定=1
+[04:08:17 up=94] 解绑后 EC 绑定=0  子设备=0
+[04:08:17 up=94] PRE  第1轮：EC 已解绑
+（无 POST —— 复位）
+```
+
+⇒ **EC 被彻底洗清。** 在我们自己的内核上，
+**解绑 EC 完全不能阻止复位**，#49 那条"元凶是 EC"的整条推理就此作废。
+
+### 修正后的事实表（只列自己实测过的）
+
+| 内核 | EC | 结果 |
+|---|---|---|
+| 上游 7.1.0-rc3 | 绑定 | ✅ 挂起+唤醒 4/4 |
+| 纯 7.2（无我们的补丁） | 绑定 | ⚠️ 干净失败 −110 @ suspend_noirq |
+| 纯 7.2 | 解绑 | ✅ 挂起+唤醒 4/4 |
+| **我们的 7.2** | 绑定 | ❌ 复位 |
+| **我们的 7.2** | **解绑** | ❌ **复位**（#28，新） |
+| 我们的 7.2 | 绑定但 PM 回调 return 0 | ❌ 复位（#24）|
+| 我们的 7.2 | 绑定但不申请中断 | ❌ 复位（#27）|
+
+⇒ 差异不在 EC，而在 **"我们的 7.2" 与 "7.1 / 纯 7.2" 之间**
+（补丁栈、内核配置、或 DTB）。
+
+### ★ 一个此前完全没被纳入考虑的变量：**Venus**
+
+对照 `ubuntu-71.conf` 与 `plain72.conf`：
+
+* **cmdline 逐字相同** ✅（这个变量干净）
+* **DTB 是两份不同的文件**，但**两份都带 venus 节点**（`aa00000` /
+  `video-codec` / `qcvss8280` 都在）
+* ★ **但 7.1 那个内核里 Venus 绑不上** —— `sc8280xp` 的 videocc 与 venus
+  支持是 **M14 我们自己打的补丁**，上游 7.1 没有。
+  ⇒ "7.1 能挂起"时 **Venus 从来没上过电**；
+  我们的 7.2 上它真的 probe 了，拿走了 rpmhpd 电源域、videocc 时钟、
+  IOMMU 和 4 条 interconnect。
+
+**Venus 是 M14 才刚 `status = "okay"` 的全新硬件块，从来没跟挂起一起测过。**
+这就是实验 #29。
+
+### 实验 #29：Venus 也不成立 —— 而且它在救援 Ubuntu 上**根本没绑定过**
+
+```
+[04:12:27 up=90] venus 驱动: []  EC 子设备: [huawei_gaokun_ec.psy.0 huawei_gaokun_ec.ucsi.0 ]
+/usr/local/bin/s71test.sh: 第 22 行： echo: 写入错误: 没有那个设备
+```
+
+★ 救援 Ubuntu 的 `/lib/firmware` 里没有 `qcvss8280.mbn`，所以 venus 一直没 probe。
+⇒ Venus 排除，**而且这条同时说明：本系列在 Ubuntu 上做的所有实验，
+Venus 从头到尾都是没上电的**，它不可能解释任何一次复位。
+
+### ★★★ 实验 #31：连**零补丁的 v7.2-rc2** 也复位 —— #49 那张表又错一行
+
+`git checkout v7.2-rc2`（干净标签、无任何补丁、无工作区改动），
+配置用**我们自己的 .config**（只把 LOCALVERSION 改成 `-PLAINV72` 好一眼认出），
+DTB / cmdline / rootfs 与前面几轮完全相同：
+
+```
+[04:18:13 up=91] ★ 内核: 7.2.0-rc2-PLAINV72  #30
+[04:18:13 up=91] EC 绑定=1
+[04:18:13 up=91] PRE  第1轮：EC 绑定
+（无 POST —— 复位）
+```
+
+⚠️ 这与 #49 记的"纯 7.2 + EC 绑定 = 干净失败 −110、压根没睡着"**不符**。
+当初那次"纯 7.2"多半用的不是我们的 .config（或根本不是干净标签），
+**那一行数据不可信**。
+
+⇒ **我们的 20 个 buildbot 补丁也基本被洗清了。**
+
+### ★ 于是唯一一个从来没被控制过的变量浮出水面：**DTB**
+
+| 轮次 | 内核 | DTB | 结果 |
+|---|---|---|---|
+| #48 | 上游 7.1.0-rc3 | **`/7.1.0-rc3/dtb`（166 783 B）** | ✅ 4/4 |
+| #24–#32 | 各种 7.2 | **`/plain72/dtb`（173 026 B）** | ❌ 全部复位 |
+
+**两份 DTB 从来就不是同一个文件，而我一直把变量当成"内核版本"。**
+
+而补丁栈里正好有一个**只改 DTB、而且直接动唤醒路径**的东西：
+
+```
+9545e6638411 arm64: dts: qcom: sc8280xp: add several missing pdc map entries
+  -<214 643 1>,   +<214 643 2>,     ← 多出 PDC 215
+  -<255 454 1>,   +<255 454 3>,     ← 多出 PDC 256 / 257
+  提交说明原文："These entries are reversed from .data section of qcgpio.sys"
+```
+
+★ **PDC 215 正是 EC 的中断**（`interrupts-extended = <&pdc 215 IRQ_TYPE_LEVEL_LOW>`），
+而这三条 PDC→GIC 映射是**从 Windows 驱动逆出来的猜测**。
+一个错的唤醒线映射，症状恰好就是"睡得下去、**任何**唤醒都整板复位"
+—— 因为所有唤醒都要经过 PDC。
+
+这就是实验 #32：**内核一个字节不动，只把这两行还原成上游**。
+
+### 实验 #32：pdc-ranges 假说也死了（而且这一轮把机器弄到要人动手）
+
+只换 DTB（内核字节不动），把 `<214 643 2>` / `<255 454 3>` 还原成上游 ——
+**机器停在早期启动，没走到 multi-user**。
+判据不是"看起来卡住"，而是 **`s71test.service` 的 symlink 还在**
+（脚本第一件事就是删掉它），证明它从没被执行。
+
+⚠️ 这一轮**需要用户长按电源键**才恢复。我给测试脚本留了自动回落，
+却没给**"改了 DTB 导致开不了机"**留任何回落。
+★ **纪律**：改 DTB / 改引导链这类**可能连 userspace 都到不了**的实验，
+必须默认走 oneshot（本轮确实是 oneshot，所以一次电源键就回 Android 了）
+—— 但要**预先告诉用户可能需要按一次**，不能事后才发现。
+
+随后把两份 DTB 反解出来逐字对比，结论是：
+
+```
+dts-71:  0xd6 0x283 0x02   0xff 0x1c6 0x03
+dts-72:  0xd6 0x283 0x02   0xff 0x1c6 0x03
+```
+
+**两份 DTB 的 `pdc-ranges` 完全相同** —— 7.1 那次也带着 PDC 215/256/257。
+⇒ 假说否定；而它们是必需的，所以去掉才会开不了机。
+
+### 实验 #33 / #34：按设备批量解绑
+
+★ 顺带得到一个**好得多的工作方式**：让测试脚本**只解绑、不挂起**，
+机器就停在救援 Ubuntu 且 **ssh 可达**，之后可以在**一次开机里连续做多个实验**，
+不必每次重启。（本轮就是靠这个在脚本挂起前 30 秒把它 kill 掉的。）
+
+⚠️ **差点又要用户动手**：#33 的批量解绑循环**没排除 RTC** ——
+`pm8xxx_rtc` 一旦被解绑，`/sys/class/rtc/rtc0/wakealarm` 就没了，
+脚本会**在没有任何唤醒源的情况下挂起**，那就只能长按电源键。
+★ 已把安全检查写进 `sx.sh`：**没有 rtc0 或闹钟没设上就拒绝挂起**。
+
+★ 救援 Ubuntu 里实际绑着的叶子设备**比想象中少得多**
+（显示栈和 venus 都没绑，`modprobe.blacklist=simpledrm` + 缺固件）：
+
+```
+音频: sound / audio-codec / rx,tx,va,wsa macro
+USB:  xhci-hcd ×2 / dwc3 ×3
+DSP:  1b300000 / 2400000 / 3000000 remoteproc
+EC:   15-0038 + ucsi
+WiFi: ath11k_pci（PCIe）
+```
+
+* **#33（ssh 交互式）**：上面除 WiFi 外**全部解绑** → **仍然复位**。
+* **#34**：再加上 **ath11k + PCIe 控制器** 一起解绑（只能用重启式脚本，
+  因为 WiFi 就是 ssh 通道本身）。
+
+## #51 ★★★ s2idle 再次改判：**复位发生在挂起【进入】时，不是唤醒时**（2026-08-21）
+
+接 #50。这一条推翻了 #47 的中心结论，也解释了为什么 #24–#36 那一长串
+"解绑某某再试"全部无效。
+
+### 决定性实验 #37：把 RTC 闹钟从 40 秒改成 **180 秒**
+
+```
+闹钟=1787288159 现在=1787287979 差=180秒
+挂起下达 12:52:59
+adb 在 12:53:27 回来（27 秒后）
+```
+
+⇒ **机器在几秒内就复位了，离 180 秒的唤醒还差得远。**
+**复位与唤醒无关**，它就发生在挂起进入的那一刻。
+
+★ 判据设计：用"adb 什么时候回来"来给复位时刻定位 ——
+复位→Android 起 adbd 约 30 秒是稳定的，所以 adb 在 t≈27 s 回来
+只能对应"t≈0 就复位了"；若真睡到 180 秒才炸，adb 会在 t≈210 s 才回来。
+
+### ★ 于是 `pm_test` 平反了 —— 而且它是最好的夹逼工具
+
+#49 里我判 `pm_test=devices` 是"本平台无效判据"，理由是"它自己就会复位"。
+**那个理由本身就是结论**：它会复位，正因为 bug 就在它覆盖的那个窗口里。
+
+同一次开机连续跑（`pm_test` 自带 5 秒后自动返回，不需要唤醒源，很安全）：
+
+```
+[04:56:36 up=39] PRE  pm_test=freezer
+[04:56:41 up=44] ★ POST pm_test=freezer  rc=0      ← 活着
+[04:56:44 up=48] PRE  pm_test=devices
+（无 POST —— 复位）                                  ← 死在这里
+```
+
+⇒ **故障区间被夹到 `dpm_suspend_start()` + `dpm_suspend_noirq()`（及其紧接的
+resume）之内。** freezer 层（只冻结进程、不碰设备）完好，
+说明与进程冻结、与 syscore、与 platform ops、与 CPU 空闲态全都无关。
+
+### 已经排除的（本轮全部是实测，不是推理）
+
+| 假说 | 实验 | 结果 |
+|---|---|---|
+| EC 的 PM 回调 | #24 | ❌ |
+| EC 的中断 | #27 | ❌ |
+| **EC 本身**（解绑） | #28 | ❌ |
+| Venus | #29 | ❌（在救援 Ubuntu 上它**根本没绑定过**）|
+| geni I²C 的 noirq 重构 | #26 | ❌ |
+| PDC 唤醒映射（pdc-ranges） | #32 + 反解两份 DTB | ❌（两份 DTB 完全相同）|
+| 我们的 20 个 buildbot 补丁 | #31（零补丁 v7.2-rc2 也复位）| ❌ |
+| **cpuidle 深空闲态**（`cpu-sleep-0-0` 全禁） | #36 | ❌ |
+| 硬件看门狗 `qcom_wdt` | 查 sysfs / systemd | ❌ 根本没在跑 |
+| 音频 / USB / 三个 remoteproc / ucsi（全解绑） | #33 | ❌ |
+| **唤醒源**（180 秒闹钟） | #37 | ❌ **复位不是唤醒引起的** |
+
+### ★ 剩下的嫌疑：**解绑不掉的"供应方"设备**
+
+叶子设备几乎全解绑了仍然复位，所以凶手在这批里：
+`nvme`（根文件系统）、`arm-smmu` ×2、`pinctrl-msm`/tlmm、`qcom-pdc`、
+`qnoc-sc8280xp` ×13（interconnect）、`rpmhpd`、`spmi_pmic_arb` ×2、
+`qcom-tsens` ×5、各时钟控制器。
+
+★★ **NVMe 排在最前面**，理由不是猜的：
+**实验 #34 里，一去碰 PCIe（解绑 ath11k 或 PCIe 控制器）机器就当场复位** ——
+不是挂起时，是解绑那一瞬间。而 NVMe 也在 PCIe 上，
+`nvme_suspend()` 做的正是同一类事（`pci_save_state` / D3）。
+根文件系统在它上面，所以**永远解绑不掉**，这也解释了为什么它一直没被测到。
+
+### ★★★ 实验 #39：`pcie_aspm=off` + NVMe APST 关闭 —— **第一次没有复位**
+
+只改 BLS 条目的 cmdline（内核、DTB、rootfs 全不动）：
+
+```
+-  pcie_aspm.policy=powersupersave
++  pcie_aspm=off nvme_core.default_ps_max_latency_us=0
+```
+
+脚本先跑 `pm_test=devices`（本来 5 秒内必复位），再跑一次真实挂起。
+
+**结果：机器没有复位。** 十分钟内 adb 没有回来、救援机也从网上消失
+（全网段扫描 + 逐个 ssh 取 hostname，确认不在线）。
+⇒ 它**真的睡进去了**，但**没有被 RTC 闹钟叫醒**。
+
+⚠️ 需要用户按一次电源键才能取回日志（本轮第二次需要人工，已记为纪律问题）。
+
+★ 这一条同时把两件事分开了：
+1. **"设备挂起阶段整板复位"** —— 与 PCIe/NVMe 的低功耗转换有关，
+   `pcie_aspm=off`（或 NVMe APST 关闭，两者本轮是一起改的，**还没分离**）
+   就能绕过；
+2. **"醒不回来"** —— 这才是 M4 当初描述的那个症状，它是**另一个独立的问题**，
+   被前一个问题掩盖了整整两轮。
+
+⬜ **下一步（待日志确认后）**：
+* 把 `pcie_aspm=off` 与 `nvme_core.default_ps_max_latency_us=0` **分离测试**，
+  确定是哪一个起作用。
+* 若是 ASPM：本机 cmdline 里那句 `pcie_aspm.policy=powersupersave`
+  **是我们自己加的**，不是上游默认 —— 那就是一个我们自己埋的雷。
+  ⚠️ 但要注意：#48 那次"7.1 能挂起"用的 cmdline 与本轮**逐字相同**，
+  所以 ASPM 单独解释不了 7.1/7.2 的差异，多半是"ASPM + 7.2 的某处变化"合并成因。
+* 然后才轮到"醒不回来"。
+
+### 变量分离：#40 / #41
+
+`pcie_aspm=off` 和 `nvme_core.default_ps_max_latency_us=0` 是一起改的，
+必须分开。两轮都**只跑 `pm_test=devices`**（5 秒自动返回，不需要唤醒源）：
+
+| 轮次 | cmdline | 结果 |
+|---|---|---|
+| #40 | **只去掉** `pcie_aspm.policy=powersupersave`（`nvme ps_max_latency` 仍是 100000）| ❌ **仍然复位** |
+| #41 | 原样 cmdline **只加** `nvme_core.default_ps_max_latency_us=0` | ⚠️ **既没复位也没跑完 —— 机器挂住了**（日志未取回，adbd 不稳）|
+
+⇒ **ASPM 策略不是原因**（#40 排除）。
+⇒ 起作用的是 `pcie_aspm=off` 或 NVMe APST 之一，**尚未定论**；
+   #41 把失败模式从"整板复位"变成了"挂住"，这本身也是个信号。
+
+### ⚠️★ 纪律：本轮让用户按了**三次**电源键，这是我的问题
+
+1. **#32**：改 DTB 导致开不了机 —— 我给测试脚本留了自动回落，
+   却没给"连 userspace 都到不了"的情况留任何回落。
+2. **#39**：真实挂起成功、但**醒不回来** —— 我明知"醒不回来"是待查问题，
+   还是在同一个脚本里排了一次真实挂起。
+3. **#41**：设备挂起阶段挂住 —— 内核层的 hang，脚本自己救不了自己。
+
+★ **改法（已定，尚未全部落地）**：
+* **只要"醒不回来"还没解决，就不要跑真实挂起** —— `pm_test=devices`
+  自带 5 秒返回，能覆盖目前所有已知的失败窗口，而且不需要唤醒源。
+* **给实验用的 BLS 条目加 `panic=10`**：本机内核已开 `CONFIG_DPM_WATCHDOG`，
+  设备回调卡住会 panic，配上 `panic=10` 就能自动重启回默认项（Android）。
+  纯硬件挂死仍救不了，但能覆盖大部分内核层 hang。
+* **改 DTB / 改引导链**这类可能连 userspace 都到不了的实验，
+  动手前先明说"可能要按一次电源键"。
+
+### ★ 一个顺带很有用的运维发现
+
+让测试脚本**只做准备、不挂起**（"stay 模式"），机器就停在救援 Ubuntu 且
+**ssh 可达**，之后可以在**一次开机里连续做多个实验**。
+本轮靠它在 30 秒的窗口里 kill 掉了一个会把机器睡死的脚本。
+⚠️ 救援机的 IP 会漂（本轮 `.230`，Android 这边是 `.46`），
+`gaokun3-rescue.local` 在 git-bash 的 ssh 里解析不了，
+可靠办法是 **ping 全网段填 ARP → 逐个 ssh 取 hostname**。

@@ -97,34 +97,50 @@
 且 `WiredAccessoryManager` 在 SystemServer 启动时只读一次，框架层也没有
 插拔模拟命令可用。
 
-### A9. ★s2idle：已拆成两个独立问题，问题 2 已逼到内核可见范围之外
-案卷 [#45](stage4-findings.md)、[#46](stage4-findings.md)。工具已就位并固化
-（内核带 `PM_DEBUG`/`DPM_WATCHDOG`，`/sys/power/pm_test` 可用）——
-**再做不需要先编内核**。`freezer` 层实测 `rc=0`/`success=1`，PM 核心是好的。
+### A9. ★s2idle：复位与"醒不回来"是**两个**问题，前者已找到绕过手段
+案卷 [#50](stage4-findings.md) / [#51](stage4-findings.md)（2026-08-21 大幅改写；
+#45–#49 的**归因**多已作废，实测数据仍保留）。
 
-**问题 1 —— ath11k 的 suspend 回调卡死（有完整栈，可独立推进）**
-`wiphy_suspend → cfg80211_leave → ieee80211_set_disassoc → ath11k_mac_op_flush`，
-之前几秒固件已 `wmi command timeout`。这是 WiFi 关联时挂起路上的第一道坎。
-**第一步**：查 ath11k 上游有无修复；否则给 `ath11k_mac_op_flush` 的等待加超时
-是最小改动。⚠️ M4 当年逐个卸的是 himax/remoteproc/EC，唯独没试 ath11k，所以漏了它。
+**★ 本轮确立的三件事**
+1. **复位发生在挂起【进入】时，不是唤醒时。** 判据：RTC 闹钟设 180 秒，机器仍在
+   几秒内复位。⇒ M4/#47 的"死在任何唤醒"是错的，之前所有"解绑某某"方向注定无效。
+2. **`pm_test` 是本平台最好的复现器，不是"无效判据"。**
+   `pm_test=freezer` rc=0、`pm_test=devices` 复位 ⇒ 故障夹在
+   `dpm_suspend_start()` + `dpm_suspend_noirq()` 之内。
+   它 5 秒自动返回、**不需要唤醒源**，因此**安全**（不会把机器睡死）。
+3. **`pcie_aspm=off nvme_core.default_ps_max_latency_us=0` 能让
+   `pm_test=devices` 返回 rc=0** —— 复位被绕过。随后真实挂起**睡进去但没醒**。
 
-**问题 2 —— 平台层面的静默整板复位（本机自有手段已用尽）**
-排除清单（每条都是实机实验，且**同时解绑四项后仍复位**）：显示栈、ath11k、
-EC、三个 remoteproc。三个阶段的 10 秒 DPM 看门狗（含我给 `device_prepare` 补的）
-**一次都没开火**、pstore 始终 0 条 ⇒ **没有任何驱动回调卡住**。
-也不是硬件看门狗（一次 `panic_timeout=0` 的 panic 让机器停了一个多小时没复位）。
-真实挂起同样是**零取证**的复位。
+**下一步（都不需要编内核）**
+* ⬜ **把两个 cmdline 变量分离干净**。已知：**只去掉
+  `pcie_aspm.policy=powersupersave` 没用**（#40 仍复位）；只关 NVMe APST（#41）
+  机器**挂住**、日志未取回 —— 重跑一次 #41 把日志拿到。
+  再单独试 `pcie_aspm=off`（保留 NVMe APST 默认值）。
+* ⬜ 若确认是 **NVMe**：正解多半是给这块盘加 `NVME_QUIRK_NO_APST`（或
+  `NVME_QUIRK_SIMPLE_SUSPEND`）的 quirk，而不是让所有用户加 cmdline。
+  先 `nvme id-ctrl` 记下 vendor/device id 与 APST 表。
+* ⬜ 若确认是 **ASPM**：注意本机 cmdline 里 `pcie_aspm.policy=powersupersave`
+  **是我们自己加的**，可以直接去掉；但 #40 说明单去掉策略不够，
+  要的是 `pcie_aspm=off`（完全关闭），那是有功耗代价的，需要权衡。
+* ⬜ 复位解决后再攻 **"醒不回来"** —— 这是 M4 描述的那个原始症状，
+  在此之前一直被复位掩盖。
 
-**第一步（换工具，别再解绑）**：★ **对照 ThinkPad X13s** —— 同 SoC、主线上
-s2idle 是能用的，所以差异在 gaokun 的 DT/固件/EC。优先逐项比对 suspend 相关节点
-（rpmhpd、AOSS、smp2p、**PDC 唤醒映射**）。注意 `recommended/0018-HACK-pinctrl-
-qcom-sc8280xp-do-not-map-gpio175-to-pdc` 这类 PDC 映射 HACK 正是 s2idle 的常见坑。
-**若仍要在本机取证**：唯一没用过的通道是 USB gadget 串口控制台
-（`g_serial` + `console=ttyGS0`），代价不小且 UDC 自己也会挂起。
+**⚠️ 靶场纪律（本轮让用户按了三次电源键，是我的问题）**
+* **"醒不回来"没解决之前，一律不跑真实挂起** —— `pm_test=devices` 够用且安全。
+* 实验用的 BLS 条目**加 `panic=10`**：内核已开 `CONFIG_DPM_WATCHDOG`，
+  设备回调卡住会 panic，配 `panic=10` 就能自动重启回默认项。
+* 改 **DTB / 引导链**这类可能连 userspace 都到不了的实验，
+  动手前先明说"可能要按一次电源键"。
+* ★ "stay 模式"（脚本只准备、不挂起）让机器停在救援 Ubuntu 且 ssh 可达，
+  一次开机能连做多个实验，效率高很多。
 
-⚠️ **靶场纪律**：这类实验只在**救援 Ubuntu** 里做 —— `default` 指普通 Ubuntu，
-失败自动落回可远程接入的系统，一轮约 3 分钟全自动。在 Android 里做会把机器
-弄到需要人按电源键（我这轮踩过两次）。
+**已被实测否掉的假说**（别再重试）：EC 的 PM 回调 / EC 的中断 / **EC 本身（解绑）** /
+Venus / geni I²C 的 noirq 重构 / PDC 唤醒映射 / **我们全部 20 个 buildbot 补丁**
+（零补丁 v7.2-rc2 同样复位）/ cpuidle 深空闲态 / 硬件看门狗 /
+音频+USB+三个 remoteproc+ucsi 全解绑。
+
+⚠️ 原 A9 里"问题 1 = ath11k 的 suspend 回调卡死"那条**并未被否定，但优先级降低**：
+它是 WiFi 关联状态下挂起路上的一道坎，而本轮的复位在它之前就发生了。
 
 ### A5. 恢复出厂设置不起作用
 设置里那条路走 misc 的 BCB + recovery，而本机没有可用 recovery
